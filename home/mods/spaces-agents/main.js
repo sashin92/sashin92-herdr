@@ -554,6 +554,8 @@ export default class Spaces extends View {
         .when(!open, (el) => el.child(String(subs.length)));
       const row = h_flex()
         .id(`ag-${a.address}`)
+        // The name is cut where the row ends: the whole of it on hover.
+        .tooltip(ag.name(a))
         .pl(26)
         .pr(8)
         .h(22)
