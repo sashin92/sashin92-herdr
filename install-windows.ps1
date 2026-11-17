@@ -67,6 +67,15 @@ function Write-Json([string]$Path, $Value) {
 # The object's shape as text, to tell whether a merge changed anything.
 function Shape($Value) { $Value | ConvertTo-Json -Depth 32 -Compress }
 
+# Whether a setting already is what we want. Herdr writes whole numbers back
+# with a decimal point (1 becomes 1.0), so a setting is compared by value, not
+# as text: that made every run replace settings.json.
+function Same($A, $B) {
+  if (($A -is [bool]) -or ($B -is [bool])) { return ($A -is [bool]) -and ($B -is [bool]) -and ($A -eq $B) }
+  if (($A -is [pscustomobject]) -or ($B -is [pscustomobject]) -or ($A -is [array]) -or ($B -is [array])) { return (Shape $A) -eq (Shape $B) }
+  return $A -eq $B
+}
+
 function Save-Replaced([string]$Path) {
   if ($DryRun -or -not (Test-Path -LiteralPath $Path)) { return }
   $rel = $Path.Substring($HerdrHome.Length).TrimStart('\', '/')
@@ -230,18 +239,23 @@ Write-Host 'settings'
 $settingsPath = Join-Path $HerdrHome 'settings.json'
 if (Test-Path -LiteralPath $settingsPath) { $settings = Read-Json $settingsPath } else { $settings = [pscustomobject]@{} }
 $wantedSettings = Read-Json (Join-Path $Source 'settings.json')
-$before = Shape $settings
+$settingsChanged = $false
 foreach ($item in $wantedSettings.PSObject.Properties) {
   if ($SkippedSettings -contains $item.Name) { continue }
   $current = $null
   if (Has $settings $item.Name) { $current = $settings.PSObject.Properties[$item.Name].Value }
   if (($item.Value -is [pscustomobject]) -and ($current -is [pscustomobject])) {
-    foreach ($inner in $item.Value.PSObject.Properties) { Set-Prop $current $inner.Name $inner.Value }
-  } else {
+    foreach ($inner in $item.Value.PSObject.Properties) {
+      if ((Has $current $inner.Name) -and (Same $current.PSObject.Properties[$inner.Name].Value $inner.Value)) { continue }
+      Set-Prop $current $inner.Name $inner.Value
+      $settingsChanged = $true
+    }
+  } elseif (-not ((Has $settings $item.Name) -and (Same $current $item.Value))) {
     Set-Prop $settings $item.Name $item.Value
+    $settingsChanged = $true
   }
 }
-if ((Shape $settings) -eq $before) { Say '=' 'settings.json already has them' }
+if (-not $settingsChanged) { Say '=' 'settings.json already has them' }
 else { Changed 'settings.json'; Save-Replaced $settingsPath; Write-Json $settingsPath $settings }
 
 # --- the running app ---

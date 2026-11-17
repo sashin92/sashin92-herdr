@@ -149,20 +149,38 @@ def merge_keys(run):
     run.write_json(path, keys)
 
 
+def same_value(a, b):
+    """Whether a setting already is what we want. Herdr writes whole numbers
+    back with a decimal point (1 becomes 1.0), which json tells apart from 1:
+    comparing settings as text made every run replace settings.json."""
+    if isinstance(a, bool) or isinstance(b, bool):
+        return isinstance(a, bool) and isinstance(b, bool) and a == b
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(same_value(a[k], b[k]) for k in a)
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(same_value(x, y) for x, y in zip(a, b))
+    return a == b
+
+
 def merge_settings(run):
     print("settings")
     path = os.path.join(run.home, "settings.json")
     settings = read_json(path) if os.path.exists(path) else {}
     wanted = read_json(os.path.join(SOURCE, "settings.json"))
-    before = json.dumps(settings, sort_keys=True)
+    changed = False
     for key, value in wanted.items():
         if PLATFORM_SETTINGS.get(key, run.platform) != run.platform:
             continue
         if isinstance(value, dict) and isinstance(settings.get(key), dict):
-            settings[key].update(value)
-        else:
+            for inner, v in value.items():
+                if inner in settings[key] and same_value(settings[key][inner], v):
+                    continue
+                settings[key][inner] = v
+                changed = True
+        elif key not in settings or not same_value(settings[key], value):
             settings[key] = value
-    if json.dumps(settings, sort_keys=True) == before:
+            changed = True
+    if not changed:
         run.say("=", "settings.json already has them")
         return
     run.changed("settings.json")
