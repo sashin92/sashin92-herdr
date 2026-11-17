@@ -1,15 +1,15 @@
 // Go to a space, a tab or a pane. A tree: machines are the big groups (this
 // computer, then the others); under each its spaces, folded; a space unfolds
 // into its tabs and a tab into its panes (program, folder, title, terminal
-// address). → unfolds, ← folds. Typing filters panes on every machine (words
-// are ANDed) and shows the matches unfolded. ↑/↓ and Enter to go, Esc to leave.
+// address). ↑/↓ or k/j move, → or l unfolds, ← or h folds, Enter goes, Esc
+// leaves. No filter box: the tree is short enough to walk.
 //
 // Beside the list, a preview as text (`hc read`), refreshed while the picker
 // is open: a pane alone, or a tab's panes where its splits put them (a space:
 // its shown tab). The splits come from each machine's `herdr-app` document.
 
 import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex, InputState, Input } from "gpui-base";
+import { v_flex, h_flex } from "gpui-base";
 import { spaces, panes, focused, run, hc, exec, checking, theme, settings, props, closeOverlay, shared, setShared, window as appWindow } from "herdr";
 
 const MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
@@ -90,26 +90,18 @@ function askCore(lines) {
 const count = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const keyOf = (r) => (r.kind === "space" ? `s:${r.w.id}` : r.kind === "tab" ? `t:${r.tab.id}` : `p:${r.p.pane}`);
 const pickable = (rows) => rows.filter((r) => r.kind !== "machine");
+const VI = { h: "left", j: "down", k: "up", l: "right", "ㅗ": "left", "ㅓ": "down", "ㅏ": "up", "ㅣ": "right" };
 
 export default class PanePicker extends View {
   init(_props, cx) {
-    this.filter = "";
-    this.input = InputState.new({ placeholder: "Filter by machine, space, program, folder…" });
-    this.input.on("change", (_e, cx) => {
-      this.filter = this.input.value();
-      this.sel = null;
-      this.reveal = true;
-      this.load(cx);
-      cx.notify();
-    });
-    this.input.on("submit", () => this.go(this.current(this.rows())));
-    this.input.focus();
-    cx.timer.after(600, () => this.input.focus());
+    // The keys come to this view itself: it has no text box to hold them.
+    this.handle = cx.focus_handle();
+    this.handle.focus();
+    cx.timer.after(600, () => this.handle.focus());
     // The selected row's key, and the unfolded spaces' and tabs' ids.
     this.sel = null;
     this.open = new Set();
     this.scroll = 0;
-    this.handle = cx.focus_handle();
     // Screens read so far, by terminal address; each tab's boxes, by tab id.
     this.shots = {};
     this.trees = {};
@@ -122,12 +114,7 @@ export default class PanePicker extends View {
     closeOverlay(props().overlay);
   }
 
-  words() {
-    return this.filter.toLowerCase().split(/\s+/).filter(Boolean);
-  }
-
   rows() {
-    const words = this.words();
     const all = panes();
     const out = [];
     let head = null;
@@ -140,23 +127,19 @@ export default class PanePicker extends View {
         for (const p of all) {
           if (p.tab !== tab.id) continue;
           const name = p.terminal ? (p.program?.name ?? "terminal") : (p.mod ?? "mod");
-          const text = [machine, w.name, tab.name, name, p.title, p.cwd, p.terminal].filter(Boolean).join(" ").toLowerCase();
-          if (!words.every((x) => text.includes(x))) continue;
           mine.push({ kind: "pane", w, tab, p, name });
         }
-        if (words.length && !mine.length) continue;
         tabs.push({ tab, mine });
         n += mine.length;
       }
-      if (words.length && !tabs.length) continue;
       if (head?.name !== machine) out.push((head = { kind: "machine", name: machine, remote: !!w.machine, spaces: 0, panes: 0 }));
       head.spaces++;
       head.panes += n;
-      const open = words.length > 0 || this.open.has(w.id);
+      const open = this.open.has(w.id);
       out.push({ kind: "space", w, open, panes: n });
       if (!open) continue;
       for (const { tab, mine } of tabs) {
-        const unfolded = words.length > 0 || this.open.has(tab.id);
+        const unfolded = this.open.has(tab.id);
         out.push({ kind: "tab", w, tab, open: unfolded, panes: mine.length });
         if (unfolded) out.push(...mine);
       }
@@ -164,17 +147,13 @@ export default class PanePicker extends View {
     return out;
   }
 
-  // The selected row: the kept one, else the first match while filtering,
-  // else the space you're in.
+  // The selected row: the kept one, else the space you're in.
   current(rows) {
     const list = pickable(rows);
     const kept = list.find((r) => keyOf(r) === this.sel);
     if (kept) return kept;
     const cur = focused();
-    return (
-      (this.words().length ? list.find((r) => r.kind === "pane") : list.find((r) => r.kind === "space" && r.w.id === cur?.space)) ??
-      list[0]
-    );
+    return list.find((r) => r.kind === "space" && r.w.id === cur?.space) ?? list[0];
   }
 
   go(r) {
@@ -277,7 +256,6 @@ export default class PanePicker extends View {
     const rows = this.rows();
     const list = pickable(rows);
     const cur = focused();
-    const filtering = this.words().length > 0;
     const sel = this.current(rows);
     this.sel = sel ? keyOf(sel) : null;
     const at = list.indexOf(sel);
@@ -311,9 +289,9 @@ export default class PanePicker extends View {
         .when(st === "done", (e) => e.child(div().flex_none().text_size(11).text_color(t.done).child("finished")));
     const chevron = (open) => svg(`mods/workspace-chrome/chevron-${open ? "down" : "right"}.svg`).size(11).flex_none().text_color(t.dim);
     const toggle = (r) => (_e, cx) => {
-      if (!filtering) this.fold(r, !r.open);
+      this.fold(r, !r.open);
       this.sel = keyOf(r);
-      this.input.focus();
+      this.handle.focus();
       this.load(cx);
       cx.notify();
     };
@@ -458,13 +436,15 @@ export default class PanePicker extends View {
       .bg(t.popover)
       .text_size(13)
       .on_key_down((e, cx) => {
-        const k = e.key;
+        // hjkl as the arrows, also under the Korean layout (the same keys type ㅗㅓㅏㅣ).
+        const m = e.modifiers;
+        const k = (!m.control && !m.alt && !m.platform && VI[e.key]) || e.key;
         if (k === "escape") return this.close();
         if (!sel) return;
+        if (k === "enter") return this.go(sel);
         if (k === "down") this.sel = keyOf(list[(at + 1) % list.length]);
         else if (k === "up") this.sel = keyOf(list[(at + list.length - 1) % list.length]);
-        // While filtering everything is unfolded, and the arrows move in the text.
-        else if ((k === "right" || k === "left") && !filtering) this.fold(sel, k === "right");
+        else if (k === "right" || k === "left") this.fold(sel, k === "right");
         else return;
         this.reveal = true;
         this.load(cx);
@@ -472,11 +452,6 @@ export default class PanePicker extends View {
         cx.notify();
       })
       .child(h_flex().items_center().child(div().flex_1().text_size(15).font_semibold().text_color(t.foreground).child("Go to…")).child(div().id("pp-esc").px(6).py(2).rounded(5).text_size(11).text_color(t.dim).cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click(() => this.close()).child("Esc")))
-      .child(
-        h_flex().h(36).flex_none().px(10).gap(8).items_center().rounded(9).border_1().border_color(t.accent).bg(t.background)
-          .child(svg("mods/workspace-chrome/search.svg").size(15).text_color(t.dim))
-          .child(Input.new(this.input).flex_1().h_full().text_size(12.8).text_color(t.foreground)),
-      )
       .child(
         h_flex()
           .id("pp-body")
@@ -493,7 +468,7 @@ export default class PanePicker extends View {
               .w(LIST_W)
               .flex_none()
               .h_full()
-              .when(!list.length, (el) => el.child(div().px(14).py(6).text_color(t.dim).child("Nothing matches.")))
+              .when(!list.length, (el) => el.child(div().px(14).py(6).text_color(t.dim).child("Nothing open.")))
               .when(fixed, (el) =>
                 el.overflow_hidden().on_scroll_wheel((e, cx) => {
                   this.scroll = Math.max(0, Math.min(this.scroll - e.delta.y, maxScroll));
@@ -510,6 +485,6 @@ export default class PanePicker extends View {
           )
           .child(preview),
       )
-      .child(div().flex_none().px(10).text_size(11).text_color(t.dim).child(filtering ? "↑↓ move · Enter go · Esc close" : "↑↓ move · → unfold · ← fold · Enter go · Esc close"));
+      .child(div().flex_none().px(10).text_size(11).text_color(t.dim).child("↑↓ / k j move · → / l unfold · ← / h fold · Enter go · Esc close"));
   }
 }
