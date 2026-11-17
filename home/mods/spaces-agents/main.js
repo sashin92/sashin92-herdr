@@ -11,6 +11,13 @@
 // long since its state changed, and its status; its sub-agents under it as a
 // tree. Click to go to its pane. The chevron at the end of a space's row folds
 // its agents. No priority view and no pins here: the agents mod has those.
+//
+// Folding: spaces fold by themselves unless that is switched off (the button
+// beside the "Spaces" title; kept as shared "spaces.autofold"). Then
+// only the space you're in is unfolded, plus any you unfolded by its chevron
+// (they stay until folded again), and a folded space still shows the agents
+// that need you. A folded space, and a folded machine, sums its agents up as
+// one mark per state.
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle } from "gpui-base";
@@ -147,6 +154,8 @@ export default class Spaces extends View {
     try { this.changed = JSON.parse(localStorage.getItem("changed") ?? "{}"); } catch { this.changed = {}; }
     if (!this.changed || typeof this.changed !== "object" || Array.isArray(this.changed)) this.changed = {};
     try { this.foldedSpaces = new Set(JSON.parse(localStorage.getItem("spaces.folded") ?? "[]")); } catch { this.foldedSpaces = new Set(); }
+    // Spaces unfolded by hand while they fold by themselves: they stay open.
+    try { this.pinned = new Set(JSON.parse(localStorage.getItem("spaces.pinned") ?? "[]")); } catch { this.pinned = new Set(); }
     this.foldedAgents = new Set();
     this.foldPress = null;
     this.listed = new Map();
@@ -472,10 +481,56 @@ export default class Spaces extends View {
     return div().size(7).mx(3).flex_none().rounded(4).bg(a.status === "done" ? color : t.dim + "00");
   }
 
-  // A space's agents, each followed by its sub-agents' tree; none while the space is folded.
+  // Whether spaces fold by themselves (on unless switched off by the title's button).
+  auto() {
+    return shared("spaces.autofold") !== false;
+  }
+
+  // Whether a space shows its agents. By themselves: the one you're in (unless
+  // folded by hand) and the ones unfolded by hand. Otherwise: all but the folded.
+  spaceOpen(w) {
+    if (!this.auto()) return !this.foldedSpaces.has(w.id);
+    return (w.active && !this.foldedSpaces.has(w.id)) || this.pinned.has(w.id);
+  }
+
+  // The chevron: fold an unfolded space, unfold a folded one, and remember it.
+  toggleSpace(w) {
+    const open = this.spaceOpen(w);
+    if (!this.auto() || w.active) open ? this.foldedSpaces.add(w.id) : this.foldedSpaces.delete(w.id);
+    if (this.auto()) open ? this.pinned.delete(w.id) : (w.active || this.pinned.add(w.id));
+    localStorage.setItem("spaces.folded", JSON.stringify([...this.foldedSpaces]));
+    localStorage.setItem("spaces.pinned", JSON.stringify([...this.pinned]));
+  }
+
+  // An agent's state with its sub-agents': the most urgent of them.
+  urgency(a, ag) {
+    return [a.status, ...this.tree(ag.all, a.address).map((k) => kidStatus(k.t, this.listed))]
+      .reduce((m, st) => ((RANK[st] ?? 0) > (RANK[m] ?? 0) ? st : m), null);
+  }
+
+  // What a folded row says of its agents: a mark per state that has any, the
+  // most urgent first, with how many once there is more than one.
+  summary(list, t, ag) {
+    const counts = {};
+    for (const a of list) {
+      const st = this.urgency(a, ag);
+      if (st) counts[st] = (counts[st] ?? 0) + 1;
+    }
+    const mark = (st) =>
+      st === "working" ? svg("mods/workspace-chrome/spinner.svg").size(10).flex_none().text_color(t.working).spin(900)
+      : st === "idle" ? div().size(6).flex_none().rounded(3).border(1.5).border_color(t.idle ?? t.dim)
+      : div().size(6).flex_none().rounded(3).bg(t[st] ?? t.dim);
+    return ["blocked", "working", "done", "idle"].filter((st) => counts[st]).map((st) =>
+      h_flex().flex_none().gap(3).items_center().child(mark(st))
+        .when(counts[st] > 1, (el) => el.child(div().text_size(10.5).text_color(st === "blocked" ? t.blocked : t.dim).child(String(counts[st])))));
+  }
+
+  // A space's agents, each followed by its sub-agents' tree. Folded: none, or,
+  // when spaces fold by themselves, only the ones that need you.
   agentRows(w, t, ag) {
-    if (this.foldedSpaces.has(w.id)) return [];
-    return (ag.bySpace.get(w.id) ?? []).flatMap((a) => {
+    const open = this.spaceOpen(w);
+    if (!open && !this.auto()) return [];
+    return (ag.bySpace.get(w.id) ?? []).filter((a) => open || this.urgency(a, ag) === "blocked").flatMap((a) => {
       const subs = this.tree(ag.all, a.address);
       const open = !this.foldedAgents.has(a.address);
       const pic = icon(a.program, 15, t.foreground);
@@ -549,7 +604,15 @@ export default class Spaces extends View {
     const ag = this.agentState();
     // agent.next / agent.prev go down this list.
     setAgentOrder(rows.flatMap((r) => ag.bySpace.get(r.w.id) ?? []).map((a) => a.address));
-    const draw = (r) => (collapsed ? [this.compact(r, t)] : [this.row(r, t, (ag.bySpace.get(r.w.id) ?? []).length), ...this.agentRows(r.w, t, ag)]);
+    // A fold made by hand in the space you were in ends when you leave it.
+    if (this.auto()) {
+      const stale = [...this.foldedSpaces].filter((id) => !rows.some((r) => r.w.id === id && r.w.active));
+      if (stale.length) {
+        stale.forEach((id) => this.foldedSpaces.delete(id));
+        localStorage.setItem("spaces.folded", JSON.stringify([...this.foldedSpaces]));
+      }
+    }
+    const draw = (r) => (collapsed ? [this.compact(r, t)] : [this.row(r, t, ag.bySpace.get(r.w.id) ?? [], ag), ...this.agentRows(r.w, t, ag)]);
     // A machine's (or everyone's) rows, and where the active space's row is among them.
     const drawAll = (list) => {
       let first = -1;
@@ -571,6 +634,8 @@ export default class Spaces extends View {
         || spaces().some(s => (s.machine ?? null) === m && !this.shown.has(s.id));
     };
     const loadingRow = m => h_flex().id(`machine-loading-${m ?? "local"}`).h(28).flex_none().px(collapsed ? 0 : 8).items_center().when(collapsed, el => el.justify_center()).text_size(12).text_color(t.dim).child(collapsed ? "…" : "Loading…");
+    // Without machine headers nothing else here starts a space: the title keeps its +.
+    this.headed = remote.length > 0;
     if (!remote.length) {
       if (loading(null) && !rows.length) return [loadingRow(null)];
       const { cells, first } = drawAll(rows);
@@ -611,6 +676,7 @@ export default class Spaces extends View {
               .tooltip(repair?.error || "This machine was rebuilt or replaced. Click to connect to the new one.")
               .on_click((_e, cx) => { cx.stop_propagation(); this.reconnect(machine, cx); })
               .child(repair?.busy ? "Connecting…" : "Connect"))))
+          .when(folded, el => el.children(this.summary(mine.flatMap((r) => ag.bySpace.get(r.w.id) ?? []), t, ag)))
           .when(connected, el => el.child(div().id(`machine-add-${m ?? "local"}`).flex_none().px(4).rounded(4).hover(s => s.bg(t.hover).text_color(t.foreground))
             .on_click((_e, cx) => { cx.stop_propagation(); run("space.new", { machine: m ?? "" }); }).child("+")))
           .child(div().size(6).rounded(3).flex_none().bg(connected ? t.ansi2 : t.dim))
@@ -663,10 +729,12 @@ export default class Spaces extends View {
       .when(g.behind > 0, (el) => el.child(div().flex_none().text_color(t.ansi1).child(`\u2193${g.behind}`)));
   }
 
-  // `n`: how many agents the space has; with any, a chevron at the end folds them.
-  row({ w, i, g, tree }, t, n = 0) {
+  // `mine`: the space's agents; with any, a chevron at the end folds them, and
+  // folded it sums them up.
+  row({ w, i, g, tree }, t, mine = [], ag = null) {
     const on = w.active;
-    const foldedHere = this.foldedSpaces.has(w.id);
+    const n = mine.length;
+    const foldedHere = !this.spaceOpen(w);
     const fromIndex = this.pressed === null ? -1 : spaces().findIndex(s => s.id === this.pressed);
     const colors = shared("space.colors") ?? {};
     const color = colors[w.id] ?? "ansi6";
@@ -708,8 +776,7 @@ export default class Spaces extends View {
         this.over = null;
         this.foldPress = null;
         if (fold) {
-          foldedHere ? this.foldedSpaces.delete(w.id) : this.foldedSpaces.add(w.id);
-          localStorage.setItem("spaces.folded", JSON.stringify([...this.foldedSpaces]));
+          this.toggleSpace(w);
         } else if (from !== null && over === w.id && from !== w.id) {
           const index = spaces().findIndex(s => s.id === w.id);
           if (index !== -1) run("space.move", { id: from, index: index + 1 });
@@ -728,8 +795,8 @@ export default class Spaces extends View {
           .when(n > 0, el => el.child(h_flex().id(`space-fold-${w.id}`).flex_none().h(18).px(3).gap(3).items_center().rounded(4)
             .text_size(11).text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
             .on_mouse_down("left", () => { this.foldPress = w.id; })
-            .child(svg(`mods/workspace-chrome/chevron-${foldedHere ? "right" : "down"}.svg`).size(11).flex_none())
-            .when(foldedHere, el => el.child(String(n))))),
+            .when(foldedHere, el => el.gap(5).children(ag ? this.summary(mine, t, ag) : []))
+            .child(svg(`mods/workspace-chrome/chevron-${foldedHere ? "right" : "down"}.svg`).size(11).flex_none()))),
       );
   }
 
@@ -772,12 +839,20 @@ export default class Spaces extends View {
       this.revealedAt = this.activeAt;
       if (this.activeAt >= 0) this.scroll.scroll_to_item(this.activeAt);
     }
+    const auto = this.auto();
+    const titleButton = (id) => div().id(id).size(22).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer().hover(s => s.bg(t.hover).text_color(t.foreground));
     return v_flex().size_full().min_h(0).bg(t.chrome).text_size(13)
       .child(h_flex().h(31).pl(16).pr(10).items_center().justify_between().text_size(11.5).text_color(t.dim)
         .when(collapsed, el => el.pl(0).pr(0).justify_center())
         .when(!collapsed, el => el.child("Spaces"))
-        .child(div().id("space-new").size(26).flex_none().flex().items_center().justify_center().rounded(6).hover(s => s.bg(t.hover).text_color(t.foreground))
-          .on_click(() => run("space.new")).child(svg("mods/workspace-chrome/plus.svg").size(14))))
+        // Each machine's header has its own +; this one is only for when there are no headers.
+        .when(!collapsed, el => el.child(h_flex().flex_none().gap(2).items_center()
+          .child(titleButton("space-autofold").when(auto, b => b.text_color(t.accent))
+            .tooltip(auto ? "Spaces fold by themselves: only the one you're in stays unfolded. Click to turn off." : "Spaces stay as you fold them. Click to fold them by themselves.")
+            .on_click(() => setShared("spaces.autofold", !auto))
+            .child(svg("mods/spaces-agents/autofold.svg").size(14)))
+          .when(!this.headed, b => b.child(titleButton("space-new").on_click(() => run("space.new")).child(svg("mods/workspace-chrome/plus.svg").size(14))))))
+        .when(collapsed && !this.headed, el => el.child(titleButton("space-new").on_click(() => run("space.new")).child(svg("mods/workspace-chrome/plus.svg").size(14)))))
       .child(v_flex().flex_1().min_h(0).px(collapsed ? 0 : 8).pb(14).overflow_y_scrollbar().mode("always").track_scroll(this.scroll)
         // A block above (another mod's) growing, or the window resizing, shrinks this list and can push the active space out.
         .on_size_change((_size, cx) => { if (this.activeAt >= 0) { this.scroll.scroll_to_item(this.activeAt); cx.notify(); } })
