@@ -124,6 +124,20 @@ space 아래에 그 space의 에이전트가 달려 나옵니다.
 
 오른쪽 숫자들은 10초마다 갱신되고, macOS와 Linux에서만 나옵니다.
 
+### 원격 컴퓨터와 파일 주고받기
+
+원격 컴퓨터의 space에서 오른쪽 위 `Files` 패널을 엽니다.
+
+| 동작 | 방법 |
+|---|---|
+| 내려받기 | 파일이나 폴더 줄에 마우스를 올리면 나오는 `↓` 버튼. 이 컴퓨터의 `~/Downloads`에 저장 |
+| 올리기 | Finder에서 파일이나 폴더를 패널의 폴더 줄에 끌어다 놓기. 목록 아래 빈 곳에 놓으면 지금 보이는 폴더로 |
+
+- 내려받을 때 같은 이름이 있으면 ` (1)`, ` (2)`를 붙임
+- 올릴 때 같은 이름이 이미 있으면 덮어쓰지 않고 전체를 중단
+- `scp`로 전송. `hc machine add`에 쓴 주소로 `ssh`가 비밀번호 없이 붙어야 함 (`--via`로 등록한 컴퓨터는 안 됨)
+- 이 컴퓨터의 space에서는 동작하지 않음 (보기 전용)
+
 ### 줌
 
 <img src="docs/images/zoom.png" width="700" alt="줌 상태">
@@ -168,4 +182,4 @@ Linux는 `install-linux.sh`에 같은 옵션을 쓰고, Windows는 `-Backups`, `
 
 ## 라이선스
 
-`spaces-agents`, `pane-picker`, `confirm-choice`, `sidebar-header`, `sidebar-footer`, `status-bar`, `tabs-slim`, `main-gap0` 레이아웃은 Herdr 기본 mod와 레이아웃을 고친 것입니다. Herdr는 Apache 2.0이고 전문은 `LICENSE-Apache-2.0`에 있습니다.
+`spaces-agents`, `pane-picker`, `confirm-choice`, `files-transfer`, `sidebar-header`, `sidebar-footer`, `status-bar`, `tabs-slim`, `main-gap0` 레이아웃은 Herdr 기본 mod와 레이아웃을 고친 것입니다. Herdr는 Apache 2.0이고 전문은 `LICENSE-Apache-2.0`에 있습니다.
