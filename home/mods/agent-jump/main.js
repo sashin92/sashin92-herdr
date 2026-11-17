@@ -1,4 +1,4 @@
-// Goes to the Nth agent, counted the way the Agents sidebar lists them:
+// Goes to the Nth agent, counted the way the sidebar lists them:
 // keys.json binds ctrl-1..9 to "agent-jump.1".."agent-jump.9".
 //
 // A key can only name a command, and a mod hears its commands only while it
@@ -6,33 +6,31 @@
 // (open it once per layout: `herdr-app do mod.open --name agent-jump`; it
 // comes back on every start).
 //
-// The order copies the sidebar's: pinned first; a sub-agent with a pane sits
-// under its parent, not on a row of its own; then by space ("grouped") or by
-// urgency ("priority"). In priority the sidebar breaks ties by its own record
-// of when each agent last changed, which another mod can't read: `seq` stands
-// in for it, so equal agents may be numbered differently there.
+// The order copies this layout's sidebar (spaces-agents), top to bottom: this
+// computer's spaces first, then each other machine's by name; within a machine
+// the spaces as spaces() has them; within a space the agents as agents() has
+// them. A sub-agent with a pane sits under its parent there, not on a row of
+// its own, so it has no number. Folded spaces and machines still count: the
+// sidebar keeps its folds to itself.
 
 import { View, div } from "gpui-kit";
-import { agents, terminals, shared, run, nextCommand, checking } from "herdr";
-
-const RANK = { blocked: 4, done: 3, working: 2, idle: 1 };
+import { agents, terminals, spaces, run, nextCommand, checking } from "herdr";
 
 function ordered() {
-  let list = agents();
-  const all = terminals();
-  const parent = new Map(all.map((t) => [t.address, t.parent]));
+  const byAddress = new Map(terminals().map((t) => [t.address, t]));
+  const list = agents();
   const listed = new Set(list.map((a) => a.address));
+  // Under a listed agent through live terminals only, as the sidebar's tree is built.
   const nested = (a) => {
-    for (let p = parent.get(a.address), n = 0; p && n < 50; p = parent.get(p), n++) if (listed.has(p)) return true;
+    for (let t = byAddress.get(a.address), n = 0; t?.state === "live" && t.parent && n < 50; t = byAddress.get(t.parent), n++) {
+      if (listed.has(t.parent)) return true;
+    }
     return false;
   };
-  list = list.filter((a) => a.pinned || !nested(a));
-  if ((shared("agents.sort") ?? "priority") !== "grouped") {
-    const kids = (addr, n = 0) => (n > 50 ? [] : all.filter((t) => t.parent === addr).flatMap((t) => [t, ...kids(t.address, n + 1)]));
-    const urgency = new Map(list.map((a) => [a.address, Math.max(RANK[a.status] ?? 0, ...kids(a.address).map((t) => RANK[t.status] ?? 0))]));
-    list = [...list].sort((x, y) => urgency.get(y.address) - urgency.get(x.address) || y.seq - x.seq);
-  }
-  return [...list.filter((a) => a.pinned), ...list.filter((a) => !a.pinned)];
+  const rows = list.filter((a) => !nested(a));
+  const sp = spaces();
+  const machines = [null, ...[...new Set(sp.map((s) => s.machine).filter(Boolean))].sort()];
+  return machines.flatMap((m) => sp.filter((s) => (s.machine ?? null) === m).flatMap((s) => rows.filter((a) => a.space === s.id)));
 }
 
 export default class AgentJump extends View {
