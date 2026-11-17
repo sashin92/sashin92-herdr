@@ -13,7 +13,7 @@
 // its agents. No priority view and no pins here: the agents mod has those.
 //
 // Folding: spaces fold by themselves unless that is switched off (the button
-// beside the "Spaces" title; kept as shared "spaces.autofold"). Then
+// in the sidebar's header, sidebar-header; kept as shared "spaces.autofold"). Then
 // only the space you're in is unfolded, plus any you unfolded by its chevron
 // (they stay until folded again), and a folded space still shows the agents
 // that need you. A folded space, and a folded machine, sums its agents up as
@@ -481,7 +481,7 @@ export default class Spaces extends View {
     return div().size(7).mx(3).flex_none().rounded(4).bg(a.status === "done" ? color : t.dim + "00");
   }
 
-  // Whether spaces fold by themselves (on unless switched off by the title's button).
+  // Whether spaces fold by themselves (on unless switched off by the header's button).
   auto() {
     return shared("spaces.autofold") !== false;
   }
@@ -634,7 +634,7 @@ export default class Spaces extends View {
         || spaces().some(s => (s.machine ?? null) === m && !this.shown.has(s.id));
     };
     const loadingRow = m => h_flex().id(`machine-loading-${m ?? "local"}`).h(28).flex_none().px(collapsed ? 0 : 8).items_center().when(collapsed, el => el.justify_center()).text_size(12).text_color(t.dim).child(collapsed ? "…" : "Loading…");
-    // Without machine headers nothing else here starts a space: the title keeps its +.
+    // Without machine headers nothing in the list starts a space: the sidebar's header has a + then.
     this.headed = remote.length > 0;
     if (!remote.length) {
       if (loading(null) && !rows.length) return [loadingRow(null)];
@@ -839,21 +839,13 @@ export default class Spaces extends View {
       this.revealedAt = this.activeAt;
       if (this.activeAt >= 0) this.scroll.scroll_to_item(this.activeAt);
     }
-    const auto = this.auto();
     const titleButton = (id) => div().id(id).size(22).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer().hover(s => s.bg(t.hover).text_color(t.foreground));
     return v_flex().size_full().min_h(0).bg(t.chrome).text_size(13)
-      .child(h_flex().h(31).pl(16).pr(10).items_center().justify_between().text_size(11.5).text_color(t.dim)
-        .when(collapsed, el => el.pl(0).pr(0).justify_center())
-        .when(!collapsed, el => el.child("Spaces"))
-        // Each machine's header has its own +; this one is only for when there are no headers.
-        .when(!collapsed, el => el.child(h_flex().flex_none().gap(2).items_center()
-          .child(titleButton("space-autofold").when(auto, b => b.text_color(t.accent))
-            .tooltip(auto ? "Spaces fold by themselves: only the one you're in stays unfolded. Click to turn off." : "Spaces stay as you fold them. Click to fold them by themselves.")
-            .on_click(() => setShared("spaces.autofold", !auto))
-            .child(svg("mods/spaces-agents/autofold.svg").size(14)))
-          .when(!this.headed, b => b.child(titleButton("space-new").on_click(() => run("space.new")).child(svg("mods/workspace-chrome/plus.svg").size(14))))))
-        .when(collapsed && !this.headed, el => el.child(titleButton("space-new").on_click(() => run("space.new")).child(svg("mods/workspace-chrome/plus.svg").size(14)))))
-      .child(v_flex().flex_1().min_h(0).px(collapsed ? 0 : 8).pb(14).overflow_y_scrollbar().mode("always").track_scroll(this.scroll)
+      // No title row: the fold switch and, without machine headers, the + are in the sidebar's header
+      // (sidebar-header). On the rail without headers nothing else starts a space, so a + stays here.
+      .when(collapsed && !this.headed, el => el.child(h_flex().h(31).flex_none().items_center().justify_center().text_color(t.dim)
+        .child(titleButton("space-new").on_click(() => run("space.new")).child(svg("mods/workspace-chrome/plus.svg").size(14)))))
+      .child(v_flex().flex_1().min_h(0).px(collapsed ? 0 : 8).pt(collapsed ? 0 : 4).pb(14).overflow_y_scrollbar().mode("always").track_scroll(this.scroll)
         // A block above (another mod's) growing, or the window resizing, shrinks this list and can push the active space out.
         .on_size_change((_size, cx) => { if (this.activeAt >= 0) { this.scroll.scroll_to_item(this.activeAt); cx.notify(); } })
         .on_mouse_up("left", (_e, cx) => { this.pressed = null; cx.notify(); })

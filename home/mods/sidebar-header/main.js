@@ -1,11 +1,13 @@
-// The head of the sidebar: only the search and fold buttons, on the right.
+// The head of the sidebar: buttons only, on the right. Whether spaces fold by
+// themselves (shared "spaces.autofold", read by spaces-agents), a + for a new
+// space when no machine header in the list has one, search, and the sidebar's fold.
 // The Herdr icon and name are left out, and the buttons are sized for the
 // 30px row that lines up with the tab bar.
 // Made from the header half of Herdr's workspace-chrome mod.
 
 import { View, div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { theme, run, window, shared, setShared, layout } from "herdr";
+import { theme, run, window, shared, setShared, layout, spaces, machines } from "herdr";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -29,7 +31,7 @@ function toggleSidebar() {
 }
 
 export default class SidebarHeader extends View {
-  button(id, icon, action) {
+  button(id, icon, action, color) {
     const t = theme();
     return div()
       .id(id)
@@ -39,18 +41,21 @@ export default class SidebarHeader extends View {
       .items_center()
       .justify_center()
       .rounded(6)
-      .text_color(t.muted)
+      .text_color(color ?? t.muted)
       .hover((s) => s.bg(t.hover).text_color(t.foreground))
       // The row drags the window; a press on a button must not.
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
       .on_click(action)
-      .child(svg(`mods/workspace-chrome/${icon}.svg`).size(14));
+      .child(svg(icon.includes("/") ? icon : `mods/workspace-chrome/${icon}.svg`).size(14));
   }
 
   render() {
     const t = theme();
     const collapsed = narrow();
     const mac = window()?.platform === "macos";
+    const auto = shared("spaces.autofold") !== false;
+    // The list groups spaces under a header per machine, each with its own +, once there is another machine.
+    const headed = machines().some((m) => m.name) || spaces().some((s) => s.machine);
     return h_flex()
       .size_full()
       .bg(t.chrome)
@@ -61,6 +66,9 @@ export default class SidebarHeader extends View {
       // Room for the traffic lights, which sit over this row in a window.
       .when(mac && !window()?.fullscreen && !collapsed, (el) => el.pl(76))
       .when(!collapsed, (el) => el.child(div().flex_1()))
+      .when(!collapsed, (el) => el.child(this.button("autofold", "mods/spaces-agents/autofold.svg", () => setShared("spaces.autofold", !auto), auto ? t.accent : t.dim)
+        .tooltip(auto ? "Spaces fold by themselves: only the one you're in stays unfolded. Click to turn off." : "Spaces stay as you fold them. Click to fold them by themselves.")))
+      .when(!collapsed && !headed, (el) => el.child(this.button("space-new", "plus", () => run("space.new")).tooltip("New space")))
       .when(!collapsed, (el) => el.child(this.button("search", "search", () => run("mod.open", { name: "picker" }))))
       // On the macOS rail the traffic lights fill the row; the footer's » unfolds it.
       .when(!(collapsed && mac), (el) => el.child(this.button("sidebar-toggle", "sidebar", toggleSidebar)));

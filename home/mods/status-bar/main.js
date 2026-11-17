@@ -2,7 +2,7 @@
 // whether that machine is connected; its branch) and the pane with the
 // keyboard (its terminal's address). Right, as tmux's status line
 // had them: that machine's CPU, memory and disk in use, its network traffic
-// and its clock; then the command palette's key.
+// and its clock.
 //
 // The numbers are read every few seconds from this computer and from each
 // machine a space is on, so they are there the moment a space is shown. On
@@ -12,7 +12,7 @@
 
 import { View, div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { spaces, focused, theme, run, exec, hc, checking, window, keys } from "herdr";
+import { spaces, focused, theme, exec, hc, checking, window } from "herdr";
 
 // How often the machines are read (ms).
 const EVERY = 10000;
@@ -169,17 +169,6 @@ export default class StatusBar extends View {
     }
   }
 
-  // The palette key as actually bound, not a hardcoded one; without a
-  // binding the hint stays useful ("commands") instead of lying.
-  hint() {
-    const mac = window()?.platform === "macos";
-    const mod = { cmd: mac ? "⌘" : "Ctrl+", ctrl: mac ? "⌃" : "Ctrl+", shift: mac ? "⇧" : "Shift+", alt: mac ? "⌥" : "Alt+", option: mac ? "⌥" : "Alt+" };
-    const b = keys().find((k) => k.section === "global" && k.action === "app.palette");
-    const parts = b && b.keys.endsWith("--") ? [...b.keys.slice(0, -2).split("-"), "-"] : b?.keys.split("-");
-    const key = parts && parts.map((p) => mod[p.toLowerCase()] ?? p.toUpperCase()).join("");
-    return key ? `${key}  commands` : "commands";
-  }
-
   render() {
     const t = theme();
     const space = spaces().find((s) => s.active);
@@ -209,7 +198,6 @@ export default class StatusBar extends View {
           .child(pill("mods/status-bar/memory.svg", t.ansi3, percent(st.mem)))
           .child(pill("mods/status-bar/disk.svg", t.ansi5, percent(st.disk)))
           .child(pill("mods/status-bar/net.svg", t.ansi6, `↓${rate(st.rx)}`, `↑${rate(st.tx)}`)))
-        .child(pill("mods/workspace-chrome/clock.svg", t.muted, clockText(st?.clock))))
-      .child(div().id("palette").flex_none().text_color(t.dim).on_click(() => run("app.palette")).child(this.hint()));
+        .child(pill("mods/workspace-chrome/clock.svg", t.muted, clockText(st?.clock))));
   }
 }
