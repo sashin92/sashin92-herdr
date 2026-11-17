@@ -35,7 +35,7 @@ powershell -ExecutionPolicy Bypass -File .\install-windows.ps1
 
 ## 단축키
 
-macOS에서는 왼쪽 Option이 Alt입니다.
+macOS에서는 양쪽 Option이 모두 Alt입니다.
 
 | 키 | 동작 |
 |---|---|

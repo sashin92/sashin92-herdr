@@ -13,5 +13,5 @@
   "ui_font": "Jetendard",
   "telemetry": false,
   "minimum_contrast": 1,
-  "option_as_alt": "left"
+  "option_as_alt": "on"
 }
