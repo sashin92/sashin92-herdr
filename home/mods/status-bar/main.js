@@ -1,6 +1,6 @@
 // The bar under the panes. Left: where the shown space is (its machine, and
 // whether that machine is connected; its branch) and the pane with the
-// keyboard (its terminal's address and folder). Right, as tmux's status line
+// keyboard (its terminal's address). Right, as tmux's status line
 // had them: that machine's CPU, memory and disk in use, its network traffic
 // and its clock; then the command palette's key.
 //
@@ -116,9 +116,6 @@ function rate(v) {
 // Everything of a reading that reaches the screen, as one text: a change in it is a reason to redraw.
 const shownText = (st) => (st ? [percent(st.cpu), percent(st.mem), percent(st.disk), rate(st.rx), rate(st.tx), clockText(st.clock), st.bare].join("|") : "");
 
-// Home as "~", on other machines too (their home isn't known here).
-const folder = (cwd) => (cwd ?? "").replace(/^\/(home|Users)\/[^/]+(?=\/|$)/, "~");
-
 export default class StatusBar extends View {
   init(_props, cx) {
     // By machine name ("" is this computer): what to show, the counters of the
@@ -202,10 +199,9 @@ export default class StatusBar extends View {
         .when(state === "connected", (el) => el.child(div().size(6).rounded(3).flex_none().bg(t.ansi2)))
         .when(Boolean(state) && state !== "connected", (el) => el.child(div().text_color(t.blocked).child(state.replace(/_/g, " ")))))
       .when(Boolean(space?.branch), (el) => el.child(label("branch", space.branch)))
-      .when(Boolean(pane?.terminal), (el) => el.child(h_flex().gap(6).min_w(0).items_center()
+      .when(Boolean(pane?.terminal), (el) => el.child(h_flex().gap(6).flex_none().items_center()
         .child(svg("mods/workspace-chrome/terminal.svg").size(13).flex_none())
-        .child(div().flex_none().text_color(t.foreground).child(pane.terminal))
-        .child(div().min_w(0).truncate().text_color(t.dim).child(folder(pane.cwd)))))
+        .child(div().flex_none().text_color(t.foreground).child(pane.terminal))))
       .child(div().flex_1())
       .child(h_flex().gap(6).flex_none().items_center()
         .when(Boolean(st) && !st.bare, (el) => el
