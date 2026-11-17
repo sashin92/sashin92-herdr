@@ -7,7 +7,7 @@
 # The same steps as scripts/install.py (macOS and Linux); keep the two in step:
 #   files     home\mods, home\layouts, home\themes are copied over when a file is
 #             missing or differs. A file it replaces is kept under
-#             <home>\.sashin92-herder-backup\<time>\ first.
+#             <home>\.sashin92-herdr-backup\<time>\ first.
 #   keys      home\keys.json is merged into the home's keys.json: its keys are set,
 #             the rest stay. Whatever key closes a tab asks first from now on, and
 #             a key this sets is taken out of the more specific "terminal" section.
@@ -91,7 +91,7 @@ if (-not $HerdrHome) {
   Write-Error ("No Herdr home with a keys.json in: " + ($candidates -join ', ') + ". Start Herdr once so it makes its home, or pass -AppHome <dir>.")
   exit 1
 }
-$script:BackupDir = Join-Path (Join-Path $HerdrHome '.sashin92-herder-backup') (Get-Date -Format 'yyyyMMdd-HHmmss')
+$script:BackupDir = Join-Path (Join-Path $HerdrHome '.sashin92-herdr-backup') (Get-Date -Format 'yyyyMMdd-HHmmss')
 if ($DryRun) { Write-Host "Herdr home: $HerdrHome  (dry run)" } else { Write-Host "Herdr home: $HerdrHome" }
 
 # --- files ---

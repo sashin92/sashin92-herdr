@@ -6,7 +6,7 @@ what differs, so a second run reports nothing to do.
 
   files     home/mods, home/layouts, home/themes are copied over when a file
             is missing or differs. A file it replaces is kept under
-            <home>/.sashin92-herder-backup/<time>/ first.
+            <home>/.sashin92-herdr-backup/<time>/ first.
   keys      home/keys.json is merged into the home's keys.json: its keys are
             set, the rest stay. Whatever key closes a tab asks first from now
             on, and a key this sets is taken out of the more specific
@@ -47,7 +47,7 @@ class Run:
         self.platform = platform
         self.dry = dry
         self.changes = 0
-        self.backup_dir = os.path.join(home, ".sashin92-herder-backup", time.strftime("%Y%m%d-%H%M%S"))
+        self.backup_dir = os.path.join(home, ".sashin92-herdr-backup", time.strftime("%Y%m%d-%H%M%S"))
 
     def say(self, mark, text):
         print(f"  {mark} {text}")

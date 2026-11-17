@@ -1,4 +1,4 @@
-# sashin92-herder
+# sashin92-herdr
 
 Herdr 세팅 저장소입니다. tmux에서 쓰던 Alt 단축키를 Herdr에서도 그대로 쓰려고 만들었습니다.
 
@@ -9,8 +9,8 @@ herdr-app 0.1.16, hc 0.1.21 기준입니다.
 Herdr를 켜 둔 상태에서 실행합니다.
 
 ```sh
-git clone https://github.com/sashin92/sashin92-herder.git
-cd sashin92-herder
+git clone https://github.com/sashin92/sashin92-herdr.git
+cd sashin92-herdr
 
 ./install-macos.sh     # macOS
 ./install-linux.sh     # Linux
@@ -88,7 +88,7 @@ macOS에서는 왼쪽 Option이 Alt입니다.
 
 `home/` 아래 파일을 고치고 스크립트를 다시 실행합니다.
 
-`~/.config/herdr-app`의 파일을 직접 고치면 다음 실행 때 저장소 내용으로 덮어씁니다. 덮어쓰기 전 파일은 `~/.config/herdr-app/.sashin92-herder-backup/`에 남습니다.
+`~/.config/herdr-app`의 파일을 직접 고치면 다음 실행 때 저장소 내용으로 덮어씁니다. 덮어쓰기 전 파일은 `~/.config/herdr-app/.sashin92-herdr-backup/`에 남습니다.
 
 ## 되돌리기
 
