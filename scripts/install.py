@@ -15,6 +15,15 @@ what differs, so a second run reports nothing to do.
   app       with Herdr running: each mod is checked, the two always-on mods
             are opened once per layout, the theme is picked and the layout
             is shown. Without Herdr running these are skipped: run it again.
+
+Backups:
+
+  --backups            lists the backups in the home, newest last.
+  --restore            puts the files of the newest backup back (--backup NAME
+                       picks another). Only files that differ are touched, and
+                       what it replaces is kept as a new backup, so a restore
+                       can be undone the same way. Files a run added (there
+                       was nothing to keep) stay where they are.
 """
 
 import argparse
@@ -27,6 +36,7 @@ import sys
 import tempfile
 import time
 
+BACKUPS = ".sashin92-herdr-backup"
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SOURCE = os.path.join(REPO, "home")
 COPIED = ("mods", "layouts", "themes")
@@ -47,7 +57,14 @@ class Run:
         self.platform = platform
         self.dry = dry
         self.changes = 0
-        self.backup_dir = os.path.join(home, ".sashin92-herdr-backup", time.strftime("%Y%m%d-%H%M%S"))
+        # A folder of its own: a run in the same second as another (a restore right after
+        # an install) must not keep its files in the backup it is reading from.
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        name, n = stamp, 1
+        while os.path.exists(os.path.join(home, BACKUPS, name)):
+            n += 1
+            name = f"{stamp}-{n}"
+        self.backup_dir = os.path.join(home, BACKUPS, name)
 
     def say(self, mark, text):
         print(f"  {mark} {text}")
@@ -153,6 +170,64 @@ def merge_settings(run):
     run.write_json(path, settings)
 
 
+def backup_names(home):
+    """The backups in the home, oldest first (their names are times)."""
+    root = os.path.join(home, BACKUPS)
+    if not os.path.isdir(root):
+        return []
+    def order(name):
+        # "20261117-175203", then "20261117-175203-2", ... "-10": by time, then by number.
+        parts = name.split("-")
+        return ("-".join(parts[:2]), int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 1)
+
+    return sorted((n for n in os.listdir(root) if os.path.isdir(os.path.join(root, n))), key=order)
+
+
+def backup_files(home, name):
+    root = os.path.join(home, BACKUPS, name)
+    found = []
+    for folder, _dirs, names in os.walk(root):
+        found += [os.path.relpath(os.path.join(folder, n), root) for n in names]
+    return sorted(found)
+
+
+def list_backups(home):
+    names = backup_names(home)
+    if not names:
+        print("No backups yet: one is made when a run replaces a file.")
+        return
+    print("backups (newest last)")
+    for name in names:
+        files = backup_files(home, name)
+        print(f"  {name}  {len(files)} file(s): {', '.join(files)}")
+
+
+def restore(run, name):
+    """Puts a backup's files back; what they replace is kept as a new backup."""
+    names = backup_names(run.home)
+    if not names:
+        sys.exit("No backups to restore from.")
+    if name is None:
+        name = names[-1]
+    elif name not in names:
+        sys.exit(f"No backup named {name}. There are: {', '.join(names)}")
+    print(f"restore from {name}")
+    root = os.path.join(run.home, BACKUPS, name)
+    same = 0
+    for rel in backup_files(run.home, name):
+        src = os.path.join(root, rel)
+        dst = os.path.join(run.home, rel)
+        if os.path.exists(dst) and filecmp.cmp(src, dst, shallow=False):
+            same += 1
+            continue
+        run.changed(f"{rel} ({'restored' if os.path.exists(dst) else 'put back'})")
+        run.backup(dst)
+        if not run.dry:
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copyfile(src, dst)
+    run.say("=", f"{same} file(s) already the same")
+
+
 def app(*args):
     """Runs herdr-app; returns (ok, parsed JSON or text)."""
     exe = shutil.which("herdr-app") or os.path.expanduser("~/.local/bin/herdr-app")
@@ -237,14 +312,33 @@ def main():
     parser.add_argument("--platform", choices=("macos", "linux"), default="macos" if sys.platform == "darwin" else "linux")
     parser.add_argument("--dry-run", action="store_true", help="say what would change, change nothing")
     parser.add_argument("--no-app", action="store_true", help="files, keys and settings only: don't talk to the running app")
+    parser.add_argument("--backups", action="store_true", help="list the backups and stop")
+    parser.add_argument("--restore", action="store_true", help="put the newest backup's files back instead of installing")
+    parser.add_argument("--backup", metavar="NAME", help="with --restore: the backup to use (default: the newest)")
     args = parser.parse_args()
+    if args.backup and not args.restore:
+        parser.error("--backup goes with --restore")
 
     home = os.path.abspath(os.path.expanduser(args.home or os.environ.get("HERDR_APP_HOME") or "~/.config/herdr-app"))
     if not os.path.isfile(os.path.join(home, "keys.json")):
         sys.exit(f"{home} has no keys.json: start Herdr once so it makes its home, then run this again.")
     print(f"Herdr home: {home}" + ("  (dry run)" if args.dry_run else ""))
 
+    if args.backups:
+        list_backups(home)
+        return
+
     run = Run(home, args.platform, args.dry_run)
+    if args.restore:
+        restore(run, args.backup)
+        if not run.changes:
+            print("Nothing to change.")
+        elif args.dry_run:
+            print(f"{run.changes} change(s) would be made.")
+        else:
+            print(f"{run.changes} change(s) made." + (f" What they replaced is kept in {run.backup_dir}" if os.path.isdir(run.backup_dir) else ""))
+        return
+
     copy_files(run)
     merge_keys(run)
     merge_settings(run)

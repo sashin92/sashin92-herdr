@@ -3,6 +3,9 @@
 #   .\install-windows.ps1 -DryRun         say what would change
 #   .\install-windows.ps1 -NoApp          files, keys and settings only
 #   .\install-windows.ps1 -AppHome <dir>  a Herdr home somewhere else
+#   .\install-windows.ps1 -Backups        list the backups
+#   .\install-windows.ps1 -Restore        put the newest backup's files back
+#   .\install-windows.ps1 -Restore -Backup <name>   put another backup's files back
 #
 # The same steps as scripts/install.py (macOS and Linux); keep the two in step:
 #   files     home\mods, home\layouts, home\themes are copied over when a file is
@@ -14,12 +17,18 @@
 #   settings  home\settings.json is merged into the home's settings.json.
 #   app       with Herdr running: each mod is checked, the two always-on mods are
 #             opened once per layout, the theme is picked and the layout is shown.
+#
+# A restore touches only files that differ and keeps what it replaces as a new
+# backup, so it can be undone the same way. Files a run added stay where they are.
 
 [CmdletBinding()]
 param(
   [string]$AppHome,
   [switch]$DryRun,
-  [switch]$NoApp
+  [switch]$NoApp,
+  [switch]$Backups,
+  [switch]$Restore,
+  [string]$Backup
 )
 
 $ErrorActionPreference = 'Stop'
@@ -58,7 +67,7 @@ function Write-Json([string]$Path, $Value) {
 # The object's shape as text, to tell whether a merge changed anything.
 function Shape($Value) { $Value | ConvertTo-Json -Depth 32 -Compress }
 
-function Backup([string]$Path) {
+function Save-Replaced([string]$Path) {
   if ($DryRun -or -not (Test-Path -LiteralPath $Path)) { return }
   $rel = $Path.Substring($HerdrHome.Length).TrimStart('\', '/')
   $saved = Join-Path $script:BackupDir $rel
@@ -91,8 +100,73 @@ if (-not $HerdrHome) {
   Write-Error ("No Herdr home with a keys.json in: " + ($candidates -join ', ') + ". Start Herdr once so it makes its home, or pass -AppHome <dir>.")
   exit 1
 }
-$script:BackupDir = Join-Path (Join-Path $HerdrHome '.sashin92-herdr-backup') (Get-Date -Format 'yyyyMMdd-HHmmss')
+$BackupRoot = Join-Path $HerdrHome '.sashin92-herdr-backup'
+# A folder of its own: a run in the same second as another (a restore right after an
+# install) must not keep its files in the backup it is reading from.
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$stampName = $stamp
+$stampCount = 1
+while (Test-Path -LiteralPath (Join-Path $BackupRoot $stampName)) { $stampCount++; $stampName = "$stamp-$stampCount" }
+$script:BackupDir = Join-Path $BackupRoot $stampName
 if ($DryRun) { Write-Host "Herdr home: $HerdrHome  (dry run)" } else { Write-Host "Herdr home: $HerdrHome" }
+
+# --- backups: list, restore ---
+function Get-BackupNames {
+  # Oldest first: by time, then by the number after it ("...-2", "...-10").
+  if (-not (Test-Path -LiteralPath $BackupRoot)) { return @() }
+  $byTime = @{ Expression = { ($_.Name -split '-')[0..1] -join '-' } }
+  $byNumber = @{ Expression = { $parts = $_.Name -split '-'; if ($parts.Count -gt 2) { [int]$parts[2] } else { 1 } } }
+  @(Get-ChildItem -LiteralPath $BackupRoot -Directory | Sort-Object $byTime, $byNumber | ForEach-Object { $_.Name })
+}
+function Get-BackupFiles([string]$Name) {
+  $root = Join-Path $BackupRoot $Name
+  @(Get-ChildItem -LiteralPath $root -Recurse -File | Sort-Object FullName |
+    ForEach-Object { $_.FullName.Substring($root.Length).TrimStart('\', '/') })
+}
+
+if ($Backup -and -not $Restore) { Write-Error '-Backup goes with -Restore'; exit 1 }
+
+if ($Backups) {
+  $names = Get-BackupNames
+  if ($names.Count -eq 0) { Write-Host 'No backups yet: one is made when a run replaces a file.'; exit 0 }
+  Write-Host 'backups (newest last)'
+  foreach ($name in $names) {
+    $files = Get-BackupFiles $name
+    Write-Host "  $name  $($files.Count) file(s): $($files -join ', ')"
+  }
+  exit 0
+}
+
+if ($Restore) {
+  $names = Get-BackupNames
+  if ($names.Count -eq 0) { Write-Error 'No backups to restore from.'; exit 1 }
+  if (-not $Backup) { $Backup = $names[-1] }
+  elseif ($names -notcontains $Backup) { Write-Error "No backup named $Backup. There are: $($names -join ', ')"; exit 1 }
+  Write-Host "restore from $Backup"
+  $root = Join-Path $BackupRoot $Backup
+  $same = 0
+  foreach ($rel in (Get-BackupFiles $Backup)) {
+    $src = Join-Path $root $rel
+    $dst = Join-Path $HerdrHome $rel
+    $exists = Test-Path -LiteralPath $dst
+    if ($exists -and ((Get-FileHash -LiteralPath $dst).Hash -eq (Get-FileHash -LiteralPath $src).Hash)) { $same++; continue }
+    if ($exists) { Changed "$rel (restored)" } else { Changed "$rel (put back)" }
+    Save-Replaced $dst
+    if (-not $DryRun) {
+      New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dst) | Out-Null
+      Copy-Item -LiteralPath $src -Destination $dst -Force
+    }
+  }
+  Say '=' "$same file(s) already the same"
+  if ($script:Changes -eq 0) { Write-Host 'Nothing to change.' }
+  elseif ($DryRun) { Write-Host "$($script:Changes) change(s) would be made." }
+  else {
+    $note = ''
+    if (Test-Path -LiteralPath $script:BackupDir) { $note = " What they replaced is kept in $($script:BackupDir)" }
+    Write-Host "$($script:Changes) change(s) made.$note"
+  }
+  exit 0
+}
 
 # --- files ---
 Write-Host 'files'
@@ -106,7 +180,7 @@ foreach ($top in $Copied) {
     $exists = Test-Path -LiteralPath $dst
     if ($exists -and ((Get-FileHash -LiteralPath $dst).Hash -eq (Get-FileHash -LiteralPath $file.FullName).Hash)) { $same++; continue }
     if ($exists) { Changed "$rel (replaced)" } else { Changed "$rel (new)" }
-    Backup $dst
+    Save-Replaced $dst
     if (-not $DryRun) {
       New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dst) | Out-Null
       Copy-Item -LiteralPath $file.FullName -Destination $dst -Force
@@ -149,7 +223,7 @@ if ((Has $keys 'terminal') -and (Has $wanted 'global')) {
   }
 }
 if ((Shape $keys) -eq $before) { Say '=' 'keys.json already has them' }
-else { Changed 'keys.json'; Backup $keysPath; Write-Json $keysPath $keys }
+else { Changed 'keys.json'; Save-Replaced $keysPath; Write-Json $keysPath $keys }
 
 # --- settings ---
 Write-Host 'settings'
@@ -168,7 +242,7 @@ foreach ($item in $wantedSettings.PSObject.Properties) {
   }
 }
 if ((Shape $settings) -eq $before) { Say '=' 'settings.json already has them' }
-else { Changed 'settings.json'; Backup $settingsPath; Write-Json $settingsPath $settings }
+else { Changed 'settings.json'; Save-Replaced $settingsPath; Write-Json $settingsPath $settings }
 
 # --- the running app ---
 function Invoke-App {

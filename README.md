@@ -88,7 +88,23 @@ macOS에서는 왼쪽 Option이 Alt입니다.
 
 `home/` 아래 파일을 고치고 스크립트를 다시 실행합니다.
 
-`~/.config/herdr-app`의 파일을 직접 고치면 다음 실행 때 저장소 내용으로 덮어씁니다. 덮어쓰기 전 파일은 `~/.config/herdr-app/.sashin92-herdr-backup/`에 남습니다.
+`~/.config/herdr-app`의 파일을 직접 고치면 다음 실행 때 저장소 내용으로 덮어씁니다. 덮어쓰기 전 파일은 백업으로 남습니다.
+
+## 백업과 복원
+
+스크립트는 파일을 덮어쓸 때마다 원래 파일을 `~/.config/herdr-app/.sashin92-herdr-backup/<시각>/`에 남깁니다. 같은 스크립트로 목록을 보고 복원할 수 있습니다.
+
+```sh
+./install-macos.sh --backups                   # 백업 목록
+./install-macos.sh --restore                   # 가장 최근 백업으로 복원
+./install-macos.sh --restore --backup <이름>   # 고른 백업으로 복원
+```
+
+Linux는 `install-linux.sh`에 같은 옵션을 쓰고, Windows는 `-Backups`, `-Restore`, `-Restore -Backup <이름>`입니다.
+
+- 복원 직전 상태도 새 백업으로 보관 (`--restore`를 한 번 더 실행하면 복원 취소)
+- 백업에 들어 있는 파일만 복원. 설치로 새로 생긴 파일은 그대로 유지
+- `--dry-run`으로 미리 보기 가능
 
 ## 되돌리기
 
