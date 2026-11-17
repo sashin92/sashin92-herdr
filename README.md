@@ -79,6 +79,7 @@ macOS에서는 왼쪽 Option이 Alt입니다.
 - pane 사이 간격 없음
 - 사이드바에 space와 에이전트를 한 목록으로 표시
 - space 줄 끝의 화살표로 그 space의 에이전트 접기
+- 사이드바의 컴퓨터 이름 아래에 그 컴퓨터의 CPU, 메모리 사용률 표시 (10초마다 갱신, macOS와 Linux만)
 - 사이드바 아래에는 Settings만 표시 (머신 추가는 Settings에서)
 - 줌 상태에서 pane 위에 빨간 ZOOM 배지 표시
 - 테마 tomorrow-night, 글꼴 Jetendard 11

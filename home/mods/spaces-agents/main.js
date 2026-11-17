@@ -11,10 +11,15 @@
 // long since its state changed, and its status; its sub-agents under it as a
 // tree. Click to go to its pane. The chevron at the end of a space's row folds
 // its agents. No priority view and no pins here: the agents mod has those.
+//
+// Machines: under each machine's header, how busy it is, as tmux's status line
+// had it: CPU and memory in use, read every few seconds (see STATS). On Linux
+// from /proc, on macOS from ps and vm_stat; a machine that answers neither
+// (Windows, one that is away) shows nothing.
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle } from "gpui-base";
-import { spaces, machines, panes, agents, terminals, focused, setAgentOrder, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout } from "herdr";
+import { spaces, machines, panes, agents, terminals, focused, setAgentOrder, run, openOverlay, exec, hc, checking, theme, shared, setShared, watchFolder, window, layout } from "herdr";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -61,6 +66,39 @@ async function both(a, b) {
 // What a stored color name looks like on an avatar (the same in every mod
 // that draws space avatars): one strong color per hue, light and dark alike.
 const MARK = { ansi6: "#22a99a", ansi3: "#e3814f", ansi4: "#5b8def", ansi5: "#8b7cf6", ansi2: "#3fae6a", ansi1: "#d9649a" };
+
+// How often each machine's CPU and memory are read (ms), and the one script that
+// reads them wherever there is a POSIX shell: Linux prints its /proc lines, macOS
+// its core count, memory size, every process's CPU share and vm_stat.
+const STATS_EVERY = 10000;
+const STATS = `if [ -r /proc/stat ]; then head -1 /proc/stat; grep -E '^(MemTotal|MemAvailable):' /proc/meminfo; else echo "mac $(sysctl -n hw.ncpu) $(sysctl -n hw.memsize)"; ps -A -o %cpu= | awk '{ s += $1 } END { print "cpusum", s }'; vm_stat; fi`;
+
+// What STATS printed, as { cpu, mem } in percent (null where it can't say yet).
+// Linux counts CPU time since boot: the share in use is the change since the
+// last reading (prev, kept by the caller), so the first reading has none.
+function readStats(out, prev) {
+  const lines = out.split("\n");
+  const num = (re) => { for (const l of lines) { const m = re.exec(l); if (m) return Number(m[1]); } return null; };
+  const mac = /^mac (\d+) (\d+)/.exec(lines[0] ?? "");
+  if (mac) {
+    const page = num(/page size of (\d+) bytes/) ?? 4096;
+    const used = ((num(/^Pages active:\s+(\d+)/) ?? 0) + (num(/^Pages wired down:\s+(\d+)/) ?? 0) + (num(/^Pages occupied by compressor:\s+(\d+)/) ?? 0)) * page;
+    const sum = num(/^cpusum ([\d.]+)/);
+    return { cpu: sum == null ? null : Math.min(100, sum / Number(mac[1])), mem: Number(mac[2]) ? (used / Number(mac[2])) * 100 : null, sample: null };
+  }
+  const cpu = /^cpu\s+(.*)$/.exec(lines[0] ?? "");
+  if (!cpu) return null;
+  const f = cpu[1].trim().split(/\s+/).slice(0, 8).map(Number);
+  const sample = { total: f.reduce((a, b) => a + b, 0), idle: (f[3] ?? 0) + (f[4] ?? 0) };
+  const span = prev ? sample.total - prev.total : 0;
+  const total = num(/^MemTotal:\s+(\d+)/);
+  const free = num(/^MemAvailable:\s+(\d+)/);
+  return {
+    cpu: span > 0 ? ((span - (sample.idle - prev.idle)) / span) * 100 : null,
+    mem: total && free != null ? ((total - free) / total) * 100 : null,
+    sample,
+  };
+}
 
 // From the agents mod: how an agent's row is named, ranked and timed.
 // Drops what an agent puts before its title: a status glyph or spinner and the separator
@@ -151,6 +189,11 @@ export default class Spaces extends View {
     this.foldPress = null;
     this.listed = new Map();
     cx.timer.every(30000, (cx) => cx.notify()); // the rows' "5m" moves on
+    // Machines' CPU and memory: "" is this computer. `samples` keeps Linux's last counters.
+    this.stats = {};
+    this.samples = {};
+    this.refreshStats(cx);
+    cx.timer.every(STATS_EVERY, (cx) => this.refreshStats(cx));
     this.refreshMachines(cx);
     cx.timer.every(15000, cx => this.refreshMachines(cx));
     // Refresh only when the refs could have changed (see `due`).
@@ -221,6 +264,45 @@ export default class Spaces extends View {
       try { const r = await hc(["machine", "ls", "--json"]); if (r.code === 0) this.machines = (JSON.parse(r.stdout).machines ?? []).filter((m) => !m.temporary); } catch {}
       cx.notify();
     });
+  }
+
+  // Reads this computer and every connected machine; redraws only when a shown number changed.
+  refreshStats(cx) {
+    if (checking()) return;
+    const names = [null, ...this.machines.filter((m) => m.state === "connected").map((m) => m.name)];
+    for (const key of Object.keys(this.stats)) if (key && !names.includes(key)) delete this.stats[key];
+    for (const m of names) {
+      if (!m && window()?.platform === "windows") continue;
+      cx.spawn(async (cx) => {
+        const key = m ?? "";
+        let next = null;
+        try {
+          const r = await exec("sh", ["-c", STATS], { on: m, timeout: 8000 });
+          const read = r.code === 0 ? readStats(r.stdout, this.samples[key]) : null;
+          if (read) {
+            if (read.sample) this.samples[key] = read.sample;
+            next = { cpu: read.cpu == null ? null : Math.round(read.cpu), mem: read.mem == null ? null : Math.round(read.mem) };
+          }
+        } catch {}
+        const old = this.stats[key];
+        if (old?.cpu === next?.cpu && old?.mem === next?.mem && Boolean(old) === Boolean(next)) return;
+        if (next) this.stats[key] = next;
+        else delete this.stats[key];
+        cx.notify();
+      });
+    }
+  }
+
+  // A machine's CPU and memory as two pills, tmux's colors: blue for CPU, yellow for memory.
+  statRow(m, t) {
+    const st = this.stats[m ?? ""];
+    if (!st) return null;
+    const pill = (icon, color, value) => h_flex().h(16).px(6).gap(4).flex_none().items_center().rounded(5).bg(t.raised).text_size(10.5).font_medium().text_color(color)
+      .child(svg(`mods/spaces-agents/${icon}.svg`).size(11).flex_none())
+      .child(div().child(value == null ? "–" : `${value}%`));
+    return h_flex().id(`machine-stats-${m ?? "local"}`).h(20).flex_none().pl(28).pr(8).gap(5).items_center()
+      .child(pill("cpu", t.ansi4, st.cpu))
+      .child(pill("memory", t.ansi3, st.mem));
   }
 
   rebuilt(machine) {
@@ -574,8 +656,9 @@ export default class Spaces extends View {
     if (!remote.length) {
       if (loading(null) && !rows.length) return [loadingRow(null)];
       const { cells, first } = drawAll(rows);
-      this.activeAt = first;
-      return cells;
+      const stats = collapsed ? null : this.statRow(null, t);
+      this.activeAt = first < 0 ? -1 : first + (stats ? 1 : 0);
+      return stats ? [stats, ...cells] : cells;
     }
     const machineNames = [null, ...remote];
     return machineNames.flatMap((m) => {
@@ -633,8 +716,10 @@ export default class Spaces extends View {
             .on_click((_e, cx) => { cx.stop_propagation(); cx.write_to_clipboard(login); this.copiedLogin = login; cx.notify(); })
             .child(this.copiedLogin === login ? "Copied" : "Copy")))] : [];
       const { cells, first } = drawAll(mine);
-      const items = [cell(head), ...guidance, ...(folded ? [] : mine.length ? cells : [loading(m) ? loadingRow(m) : cell(empty)])];
-      if (!folded && first >= 0) this.activeAt = before + 1 + guidance.length + first;
+      const stats = collapsed || !connected ? null : this.statRow(m, t);
+      const above = [cell(head), ...(stats ? [stats] : []), ...guidance];
+      const items = [...above, ...(folded ? [] : mine.length ? cells : [loading(m) ? loadingRow(m) : cell(empty)])];
+      if (!folded && first >= 0) this.activeAt = before + above.length + first;
       before += items.length;
       return items;
     });
