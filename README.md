@@ -85,7 +85,7 @@ macOS에서는 왼쪽 Option이 Alt입니다.
 | 위치 | 내용 |
 |---|---|
 | 왼쪽 | space와 에이전트를 한 목록으로 보여주는 사이드바 |
-| 위 | tab 줄 (Herdr 기본 그대로) |
+| 위 | tab 줄 (기본보다 얇게, 높이 30px) |
 | 가운데 | pane. 사이 간격과 바깥 여백 없이 테두리 선으로만 구분 |
 | 아래 | 상태 줄 |
 
@@ -166,4 +166,4 @@ Linux는 `install-linux.sh`에 같은 옵션을 쓰고, Windows는 `-Backups`, `
 
 ## 라이선스
 
-`spaces-agents`, `pane-picker`, `confirm-choice`, `sidebar-footer`, `status-bar`, `main-gap0` 레이아웃은 Herdr 기본 mod와 레이아웃을 고친 것입니다. Herdr는 Apache 2.0이고 전문은 `LICENSE-Apache-2.0`에 있습니다.
+`spaces-agents`, `pane-picker`, `confirm-choice`, `sidebar-header`, `sidebar-footer`, `status-bar`, `tabs-slim`, `main-gap0` 레이아웃은 Herdr 기본 mod와 레이아웃을 고친 것입니다. Herdr는 Apache 2.0이고 전문은 `LICENSE-Apache-2.0`에 있습니다.
