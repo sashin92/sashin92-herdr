@@ -1,0 +1,1 @@
+{ "place": "none", "title": "Agent jump", "overlay": { "kind": "window", "frame": "none", "key": "agent-jump", "keep": true, "at": { "x": 0, "y": 0 } } }

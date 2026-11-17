@@ -1,0 +1,1 @@
+{ "place": "none", "title": "Zoom badge", "overlay": { "kind": "window", "frame": "none", "key": "zoom-badge", "keep": true, "at": { "x": 320, "y": 34 } } }

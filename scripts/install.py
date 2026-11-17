@@ -1,0 +1,262 @@
+#!/usr/bin/env python3
+"""Puts this repo's Herdr setup into a Herdr home (macOS and Linux).
+
+Safe to run again: every step looks at what is there first and changes only
+what differs, so a second run reports nothing to do.
+
+  files     home/mods, home/layouts, home/themes are copied over when a file
+            is missing or differs. A file it replaces is kept under
+            <home>/.sashin92-herder-backup/<time>/ first.
+  keys      home/keys.json is merged into the home's keys.json: its keys are
+            set, the rest stay. Whatever key closes a tab asks first from now
+            on, and a key this sets is taken out of the more specific
+            "terminal" section, where it would win over "global".
+  settings  home/settings.json is merged into the home's settings.json.
+  app       with Herdr running: each mod is checked, the two always-on mods
+            are opened once per layout, the theme is picked and the layout
+            is shown. Without Herdr running these are skipped: run it again.
+"""
+
+import argparse
+import filecmp
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SOURCE = os.path.join(REPO, "home")
+COPIED = ("mods", "layouts", "themes")
+# An action a key already has, and what that key does instead.
+REPLACED_ACTIONS = {"tab.close": "mod.open:confirm-close-tab"}
+# Settings only one platform reads.
+PLATFORM_SETTINGS = {"option_as_alt": "macos"}
+LAYOUT = "main-gap0"
+THEME = "tomorrow-night"
+# Mods that live as kept, unseen windows: opened once per layout, they come back on every start.
+KEPT = ("zoom-badge", "agent-jump")
+KEPT_LAYOUTS = ("main", LAYOUT)
+
+
+class Run:
+    def __init__(self, home, platform, dry):
+        self.home = home
+        self.platform = platform
+        self.dry = dry
+        self.changes = 0
+        self.backup_dir = os.path.join(home, ".sashin92-herder-backup", time.strftime("%Y%m%d-%H%M%S"))
+
+    def say(self, mark, text):
+        print(f"  {mark} {text}")
+
+    def changed(self, text):
+        self.changes += 1
+        self.say("~" if self.dry else "+", text)
+
+    def backup(self, path):
+        """Keeps the file a step is about to replace."""
+        if self.dry or not os.path.exists(path):
+            return
+        kept = os.path.join(self.backup_dir, os.path.relpath(path, self.home))
+        os.makedirs(os.path.dirname(kept), exist_ok=True)
+        shutil.copy2(path, kept)
+
+    def write_json(self, path, value):
+        if self.dry:
+            return
+        folder = os.path.dirname(path)
+        fd, tmp = tempfile.mkstemp(dir=folder, prefix=".tmp-", suffix=".json")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(value, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+        os.replace(tmp, path)
+
+
+def read_json(path):
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def copy_files(run):
+    print("files")
+    same = 0
+    for top in COPIED:
+        for folder, _dirs, names in os.walk(os.path.join(SOURCE, top)):
+            for name in sorted(names):
+                src = os.path.join(folder, name)
+                rel = os.path.relpath(src, SOURCE)
+                dst = os.path.join(run.home, rel)
+                if os.path.exists(dst) and filecmp.cmp(src, dst, shallow=False):
+                    same += 1
+                    continue
+                run.changed(f"{rel} ({'replaced' if os.path.exists(dst) else 'new'})")
+                run.backup(dst)
+                if not run.dry:
+                    os.makedirs(os.path.dirname(dst), exist_ok=True)
+                    shutil.copyfile(src, dst)
+    run.say("=", f"{same} files already the same")
+
+
+def merge_keys(run):
+    print("keys")
+    path = os.path.join(run.home, "keys.json")
+    keys = read_json(path)
+    wanted = read_json(os.path.join(SOURCE, "keys.json"))
+    before = json.dumps(keys, sort_keys=True)
+    for section, binds in wanted.items():
+        mine = keys.setdefault(section, {})
+        for key, action in binds.items():
+            if mine.get(key) != action:
+                run.say(".", f"{section}: {key} -> {action}" + (f" (was {mine[key]})" if key in mine else ""))
+                mine[key] = action
+    for section, binds in keys.items():
+        if not isinstance(binds, dict):
+            continue
+        for key, action in list(binds.items()):
+            if isinstance(action, str) and action in REPLACED_ACTIONS:
+                run.say(".", f"{section}: {key} -> {REPLACED_ACTIONS[action]} (was {action})")
+                binds[key] = REPLACED_ACTIONS[action]
+    # "terminal" wins over "global" while a terminal has the keyboard.
+    for key in wanted.get("global", {}):
+        if key in keys.get("terminal", {}):
+            run.say(".", f"terminal: {key} removed (was {keys['terminal'][key]}): global has it now")
+            del keys["terminal"][key]
+    if json.dumps(keys, sort_keys=True) == before:
+        run.say("=", "keys.json already has them")
+        return
+    run.changed("keys.json")
+    run.backup(path)
+    run.write_json(path, keys)
+
+
+def merge_settings(run):
+    print("settings")
+    path = os.path.join(run.home, "settings.json")
+    settings = read_json(path) if os.path.exists(path) else {}
+    wanted = read_json(os.path.join(SOURCE, "settings.json"))
+    before = json.dumps(settings, sort_keys=True)
+    for key, value in wanted.items():
+        if PLATFORM_SETTINGS.get(key, run.platform) != run.platform:
+            continue
+        if isinstance(value, dict) and isinstance(settings.get(key), dict):
+            settings[key].update(value)
+        else:
+            settings[key] = value
+    if json.dumps(settings, sort_keys=True) == before:
+        run.say("=", "settings.json already has them")
+        return
+    run.changed("settings.json")
+    run.backup(path)
+    run.write_json(path, settings)
+
+
+def app(*args):
+    """Runs herdr-app; returns (ok, parsed JSON or text)."""
+    exe = shutil.which("herdr-app") or os.path.expanduser("~/.local/bin/herdr-app")
+    try:
+        done = subprocess.run([exe, *args], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as err:
+        return False, str(err)
+    text = done.stdout.strip() or done.stderr.strip()
+    try:
+        value = json.loads(done.stdout)
+    except ValueError:
+        return done.returncode == 0, text
+    return done.returncode == 0 and not (isinstance(value, dict) and "error" in value), value
+
+
+def app_steps(run):
+    print("app")
+    ok, status = app("status")
+    if not ok or not isinstance(status, dict):
+        run.say("!", "Herdr isn't running (or herdr-app isn't on PATH): start Herdr and run this again to finish.")
+        return False
+    if run.dry:
+        run.say("=", "skipped in a dry run")
+        return True
+
+    for mod in sorted(os.listdir(os.path.join(SOURCE, "mods"))):
+        ok, out = app("check", os.path.join(run.home, "mods", mod))
+        if not ok:
+            run.say("!", f"{mod} doesn't pass `herdr-app check` on this Herdr: {str(out).splitlines()[0] if out else ''}")
+
+    def kept():
+        path = os.path.join(run.home, "windows.json")
+        try:
+            return read_json(path).get("kept", {})
+        except (OSError, ValueError):
+            return {}
+
+    def shown():
+        return app("status")[1]
+
+    for layout in KEPT_LAYOUTS:
+        missing = [m for m in KEPT if m not in kept().get(layout, {})]
+        if not missing:
+            continue
+        if shown().get("layout") != layout:
+            app("do", "layout.switch", "--name", layout)
+        for mod in missing:
+            # mod.open toggles: open it only when it isn't.
+            if mod not in shown().get("overlays", []):
+                app("do", "mod.open", "--name", mod)
+            if mod in shown().get("overlays", []):
+                run.changed(f"{mod} opened in the {layout} layout")
+            else:
+                run.say("!", f"{mod} didn't open in the {layout} layout")
+
+    if shown().get("layout") != LAYOUT:
+        ok, out = app("do", "layout.switch", "--name", LAYOUT)
+        if ok:
+            run.changed(f"showing the {LAYOUT} layout")
+        else:
+            run.say("!", f"couldn't show the {LAYOUT} layout: {out}")
+
+    # The layout's dark theme, read from where Herdr keeps a layout's picks.
+    try:
+        picked = read_json(os.path.join(run.home, "layouts", ".state", f"{LAYOUT}.json")).get("theme")
+    except (OSError, ValueError):
+        picked = None
+    dark = picked.get("dark") if isinstance(picked, dict) else picked
+    if dark != THEME:
+        ok, out = app("do", "app.theme", "--name", THEME)
+        if ok:
+            run.changed(f"theme {THEME}")
+        else:
+            run.say("!", f"couldn't pick the theme {THEME}: {out}")
+    run.say("=", "app is set")
+    return True
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Install this Herdr setup. Safe to run again.")
+    parser.add_argument("--home", help="the Herdr home (default: $HERDR_APP_HOME, else ~/.config/herdr-app)")
+    parser.add_argument("--platform", choices=("macos", "linux"), default="macos" if sys.platform == "darwin" else "linux")
+    parser.add_argument("--dry-run", action="store_true", help="say what would change, change nothing")
+    parser.add_argument("--no-app", action="store_true", help="files, keys and settings only: don't talk to the running app")
+    args = parser.parse_args()
+
+    home = os.path.abspath(os.path.expanduser(args.home or os.environ.get("HERDR_APP_HOME") or "~/.config/herdr-app"))
+    if not os.path.isfile(os.path.join(home, "keys.json")):
+        sys.exit(f"{home} has no keys.json: start Herdr once so it makes its home, then run this again.")
+    print(f"Herdr home: {home}" + ("  (dry run)" if args.dry_run else ""))
+
+    run = Run(home, args.platform, args.dry_run)
+    copy_files(run)
+    merge_keys(run)
+    merge_settings(run)
+    finished = True if args.no_app else app_steps(run)
+
+    if not run.changes:
+        print("Nothing to change." if finished else "Files, keys and settings are already in place.")
+    elif args.dry_run:
+        print(f"{run.changes} change(s) would be made.")
+    else:
+        print(f"{run.changes} change(s) made." + (f" Replaced files are kept in {run.backup_dir}" if os.path.isdir(run.backup_dir) else ""))
+
+
+if __name__ == "__main__":
+    main()
