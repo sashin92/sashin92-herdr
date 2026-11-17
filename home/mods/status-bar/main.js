@@ -1,12 +1,12 @@
 // The bar under the panes. Left: where the shown space is (its machine, and
 // whether that machine is connected; its branch) and the pane with the
 // keyboard (its terminal's address and folder). Right, as tmux's status line
-// had them: that machine's CPU, memory and disk in use, its network traffic,
-// how long it has been up and its clock; then the command palette's key.
+// had them: that machine's CPU, memory and disk in use, its network traffic
+// and its clock; then the command palette's key.
 //
 // The numbers are read every few seconds from this computer and from each
 // machine a space is on, so they are there the moment a space is shown. On
-// Linux from /proc, on macOS from ps, vm_stat, sysctl and netstat; a machine
+// Linux from /proc, on macOS from ps, vm_stat and netstat; a machine
 // that answers neither (Windows, one that is away) shows only this computer's
 // own clock. Made from Herdr's workspace-status mod.
 
@@ -21,31 +21,28 @@ const EVERY = 10000;
 // line it prints starts with what it is:
 //   time   seconds since 1970 and the offset from UTC
 //   disk   how full the volume with the home folder is
-//   Linux  /proc/stat's cpu line, MemTotal and MemAvailable, "up" in seconds,
-//          "net" bytes in and out so far (wired and wireless interfaces only:
-//          bridges, containers and tunnels would count the same bytes again)
+//   Linux  /proc/stat's cpu line, MemTotal and MemAvailable, "net" bytes in
+//          and out so far (wired and wireless interfaces only: bridges,
+//          containers and tunnels would count the same bytes again)
 //   macOS  "mac" with the core count and memory size, "cpusum" (every
-//          process's CPU share added up), vm_stat, "boot" (when it started,
-//          seconds since 1970), "net" as above
+//          process's CPU share added up), vm_stat, "net" as above
 const STATS = String.raw`
 echo "time $(date +%s) $(date +%z)"
 echo "disk $(df -P "$HOME" 2>/dev/null | awk 'NR == 2 { print $5 }')"
 if [ -r /proc/stat ]; then
   head -1 /proc/stat
   grep -E '^(MemTotal|MemAvailable):' /proc/meminfo
-  echo "up $(cut -d' ' -f1 /proc/uptime)"
   awk 'NR > 2 { sub(/^ +/, ""); split($0, a, /[: ]+/); if (a[1] ~ /^(en|eth|wl)/) { rx += a[2]; tx += a[10] } } END { printf "net %.0f %.0f\n", rx, tx }' /proc/net/dev
 else
   echo "mac $(sysctl -n hw.ncpu) $(sysctl -n hw.memsize)"
   ps -A -o %cpu= | awk '{ s += $1 } END { print "cpusum", s }'
   vm_stat
-  echo "boot $(sysctl -n kern.boottime | sed 's/^{ sec = \([0-9]*\).*/\1/')"
   netstat -ibn | awk '$1 ~ /^en/ && $3 ~ /^<Link/ { if (NF >= 11) { rx += $7; tx += $10 } else { rx += $6; tx += $9 } } END { printf "net %.0f %.0f\n", rx, tx }'
 fi
 `;
 
-// What STATS printed, as what the bar shows: cpu, mem and disk in percent, up
-// in seconds, rx and tx in bytes a second (each null where it can't say yet),
+// What STATS printed, as what the bar shows: cpu, mem and disk in percent, rx
+// and tx in bytes a second (each null where it can't say yet),
 // the clock as { skew, zone } (ms ahead of this computer's clock, minutes east
 // of UTC), and the counters the next reading compares with. Linux's CPU time
 // and both systems' network bytes count up from boot: what is in use now is
@@ -58,7 +55,7 @@ function readStats(out, prev, now) {
   if (!time) return null;
   const at = Number(time[1]);
   const read = {
-    cpu: null, mem: null, up: null, rx: null, tx: null,
+    cpu: null, mem: null, rx: null, tx: null,
     disk: num(/^disk (\d+)%/),
     clock: { skew: at * 1000 - now, zone: (time[2] === "-" ? -1 : 1) * (Number(time[3]) * 60 + Number(time[4])) },
     sample: { at },
@@ -78,10 +75,8 @@ function readStats(out, prev, now) {
     const page = num(/page size of (\d+) bytes/) ?? 4096;
     const used = ((num(/^Pages active:\s+(\d+)/) ?? 0) + (num(/^Pages wired down:\s+(\d+)/) ?? 0) + (num(/^Pages occupied by compressor:\s+(\d+)/) ?? 0)) * page;
     const sum = num(/^cpusum ([\d.]+)/);
-    const boot = num(/^boot (\d+)/);
     read.cpu = sum == null ? null : Math.min(100, sum / Number(mac[1]));
     read.mem = Number(mac[2]) ? (used / Number(mac[2])) * 100 : null;
-    read.up = boot ? at - boot : null;
     return read;
   }
   const cpu = find(/^cpu\s+(.*)$/);
@@ -94,7 +89,6 @@ function readStats(out, prev, now) {
   const total = num(/^MemTotal:\s+(\d+)/);
   const free = num(/^MemAvailable:\s+(\d+)/);
   if (total && free != null) read.mem = ((total - free) / total) * 100;
-  read.up = num(/^up ([\d.]+)/);
   return read;
 }
 
@@ -119,17 +113,8 @@ function rate(v) {
   }
 }
 
-// Seconds as its largest unit: "42m", "5h", "18d".
-function span(seconds) {
-  if (seconds == null) return "–";
-  const m = Math.floor(seconds / 60);
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`;
-}
-
 // Everything of a reading that reaches the screen, as one text: a change in it is a reason to redraw.
-const shownText = (st) => (st ? [percent(st.cpu), percent(st.mem), percent(st.disk), rate(st.rx), rate(st.tx), span(st.up), clockText(st.clock), st.bare].join("|") : "");
+const shownText = (st) => (st ? [percent(st.cpu), percent(st.mem), percent(st.disk), rate(st.rx), rate(st.tx), clockText(st.clock), st.bare].join("|") : "");
 
 // Home as "~", on other machines too (their home isn't known here).
 const folder = (cwd) => (cwd ?? "").replace(/^\/(home|Users)\/[^/]+(?=\/|$)/, "~");
@@ -227,8 +212,7 @@ export default class StatusBar extends View {
           .child(pill("mods/status-bar/cpu.svg", t.ansi4, percent(st.cpu)))
           .child(pill("mods/status-bar/memory.svg", t.ansi3, percent(st.mem)))
           .child(pill("mods/status-bar/disk.svg", t.ansi5, percent(st.disk)))
-          .child(pill("mods/status-bar/net.svg", t.ansi6, `↓${rate(st.rx)}`, `↑${rate(st.tx)}`))
-          .child(pill("mods/status-bar/uptime.svg", t.ansi2, span(st.up))))
+          .child(pill("mods/status-bar/net.svg", t.ansi6, `↓${rate(st.rx)}`, `↑${rate(st.tx)}`)))
         .child(pill("mods/workspace-chrome/clock.svg", t.muted, clockText(st?.clock))))
       .child(div().id("palette").flex_none().text_color(t.dim).on_click(() => run("app.palette")).child(this.hint()));
   }
