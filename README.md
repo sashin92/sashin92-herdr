@@ -42,7 +42,6 @@ macOS에서는 양쪽 Option이 모두 Alt입니다.
 | `Alt+h/j/k/l` | pane 이동 |
 | `Alt+Shift+h/j/k/l` | pane 크기 조정 |
 | `Alt+\|` `Alt+"` | pane 나누기 (좌우, 상하) |
-| `Alt+↑` `Alt+↓` | 터미널 지난 출력 스크롤 (반 화면씩) |
 | `Alt+1`~`9` | space 이동 |
 | `Alt+[` `Alt+]` | 이전, 다음 space |
 | `Ctrl+1`~`9` | N번째 에이전트로 이동 (사이드바 순서) |
@@ -111,6 +110,7 @@ space 아래에 그 space의 에이전트가 달려 나옵니다.
 - 접힌 space와 접힌 컴퓨터 줄에는 에이전트 상태를 점으로 요약 (같은 상태가 둘 이상이면 개수 표시)
 - 접힌 space라도 확인이 필요한 에이전트는 표시
 - 원격 컴퓨터가 있으면 컴퓨터별로 묶어서 표시 (컴퓨터 이름은 강조색 굵은 글씨)
+- 원격 컴퓨터 이름을 오른쪽 클릭하면 메뉴가 뜨고, `Rename`을 고르면 그 자리에서 이름 변경 (Enter 저장, Esc 취소). Settings > Machines의 Rename과 같은 동작이고, 이 컴퓨터에서 부르는 이름만 바뀜
 - 연결이 안 되는 컴퓨터는 맨 아래 `Unreachable` 구역에 빨간색으로 표시. `Retry`를 누르면 바로 다시 연결을 시도하고, 연결될 때까지 그 구역에 머묾
 - 맨 아래에는 Settings만 표시 (머신 추가는 Settings에서)
 
@@ -189,4 +189,4 @@ Linux는 `install-linux.sh`에 같은 옵션을 쓰고, Windows는 `-Backups`, `
 
 ## 라이선스
 
-`spaces-agents`, `pane-picker`, `confirm-choice`, `files-transfer`, `sidebar-header`, `sidebar-footer`, `status-bar`, `tabs-slim`, `main-gap0` 레이아웃은 Herdr 기본 mod와 레이아웃을 고친 것입니다. Herdr는 Apache 2.0이고 전문은 `LICENSE-Apache-2.0`에 있습니다.
+`spaces-agents`, `pane-picker`, `machine-menu`, `confirm-choice`, `files-transfer`, `sidebar-header`, `sidebar-footer`, `status-bar`, `tabs-slim`, `main-gap0` 레이아웃은 Herdr 기본 mod와 레이아웃을 고친 것입니다. Herdr는 Apache 2.0이고 전문은 `LICENSE-Apache-2.0`에 있습니다.

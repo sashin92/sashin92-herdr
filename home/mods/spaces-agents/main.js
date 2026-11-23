@@ -20,8 +20,8 @@
 // one mark per state.
 
 import { View, div, svg, image } from "gpui-kit";
-import { v_flex, h_flex, ScrollHandle } from "gpui-base";
-import { spaces, machines, panes, agents, terminals, focused, setAgentOrder, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout } from "herdr";
+import { v_flex, h_flex, ScrollHandle, InputState, Input } from "gpui-base";
+import { spaces, machines, panes, agents, terminals, focused, setAgentOrder, run, openOverlay, exec, hc, notify, nextCommand, checking, theme, shared, setShared, watchFolder, window, layout } from "herdr";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -148,6 +148,7 @@ export default class Spaces extends View {
     this.machines = [];
     this.retrying = new Set(); // unreachable machines being dialed again
     this.lost = new Set(); // machines that couldn't be reached and haven't connected since
+    this.renaming = null; // { name, input }: the machine whose title is a text box now
     try {
       this.reconnecting = JSON.parse(localStorage.getItem("machines.reconnecting") ?? "{}");
       if (!this.reconnecting || typeof this.reconnecting !== "object" || Array.isArray(this.reconnecting)) this.reconnecting = {};
@@ -167,6 +168,13 @@ export default class Spaces extends View {
     cx.timer.every(30000, (cx) => cx.notify()); // the rows' "5m" moves on
     this.refreshMachines(cx);
     cx.timer.every(15000, cx => this.refreshMachines(cx));
+    if (!checking()) cx.spawn(async cx => {
+      for (;;) {
+        if ((await nextCommand()) !== "rename") continue;
+        const name = shared("machine.rename");
+        if (this.machines.some(m => m.name === name)) this.startRename(name, cx);
+      }
+    });
     // Refresh only when the refs could have changed (see `due`).
     cx.timer.every(250, (cx) => this.checkNew(cx));
   }
@@ -251,6 +259,49 @@ export default class Spaces extends View {
           : exec("sh", ["-c", 'printf "%s\\n" "$1" | hc connect', "sh", ask], { timeout: 120000 }));
       } catch {}
       this.retrying.delete(name);
+      this.refreshMachines(cx);
+    });
+  }
+
+  // A machine's name here (only this core's name for it, as Settings > Machines
+  // renames): right-click its title, Rename (the machine-menu mod, which sends
+  // "rename" with the name in shared "machine.rename"), type, Enter. Esc or a
+  // click elsewhere leaves it as it was.
+  startRename(name, cx) {
+    const input = InputState.new({ value: name });
+    // The range counts bytes.
+    input.set_selected_range({ start: 0, end: encodeURIComponent(name).replace(/%[0-9A-F]{2}/g, "_").length });
+    const state = this.renaming = { name, input, since: Date.now() };
+    input.on("submit", (_e, cx) => this.rename(state, cx));
+    input.on("blur", (_e, cx) => {
+      if (this.renaming !== state) return;
+      // The menu closing hands the keyboard back to the terminal: take it again.
+      if (Date.now() - state.since < 600) return input.focus();
+      this.renaming = null;
+      cx.notify();
+    });
+    input.focus();
+    cx.timer.after(200, () => { if (this.renaming === state) input.focus(); });
+    cx.notify();
+  }
+
+  rename(state, cx) {
+    const to = state.input.value().trim();
+    this.renaming = null;
+    cx.notify();
+    if (!to || to === state.name) return;
+    cx.spawn(async cx => {
+      let r;
+      try { r = await hc(["machine", "rename", state.name, to, "--json"]); } catch (e) { r = { code: 1, stderr: String(e.message ?? e) }; }
+      if (r.code !== 0) {
+        let why;
+        try { why = JSON.parse(r.stdout || r.stderr).error?.message; } catch {}
+        notify({ title: `Couldn't rename ${state.name}`, body: why || r.stderr || "", level: "error" });
+        return;
+      }
+      // Its fold and its place in the list go with it.
+      for (const set of [this.folded, this.lost]) if (set.delete(state.name)) set.add(to);
+      localStorage.setItem("machines.folded", JSON.stringify([...this.folded]));
       this.refreshMachines(cx);
     });
   }
@@ -701,6 +752,7 @@ export default class Spaces extends View {
       const head = h_flex().id(`machine-${m ?? "local"}`).h(22).flex_none().px(collapsed ? 0 : 8).gap(7).items_center().text_size(11).text_color(t.dim)
         .when(collapsed, el => el.mt(4).w(RAIL_CELL).justify_center().rounded(6).tooltip(login ? `${m} needs a login: run ${login}. Click for Copy.` : m ? `${m} · ${connected ? "connected" : (machine?.state ?? "asleep").replace(/_/g, " ")}` : "This computer"))
         .cursor_pointer().hover(s => s.bg(t.hover))
+        .on_mouse_down("right", () => { if (m && !collapsed) openOverlay({ mod: "machine-menu", kind: "popup", width: 200, height: 260, props: { machine: m } }); })
         .on_click((_e, cx) => {
           if (collapsed && login) { run("app.settings", { section: "machines" }); return; }
           folded ? this.folded.delete(m) : this.folded.add(m);
@@ -712,7 +764,12 @@ export default class Spaces extends View {
           .on_click((_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "machine-add", kind: "dialog", width: 560 }); }).child("⚠")))
         .when(!collapsed, el => el.child(icon))
         .when(collapsed, el => el.child(div().relative().flex_none().child(icon).when(Boolean(m), el => el.child(badge))))
-        .when(!collapsed, el => el.child(div().flex_1().truncate().text_size(13).font_bold().text_color(tone).child(m ?? "This computer"))
+        .when(!collapsed, el => el.child(this.renaming?.name === m && m
+          ? div().id(`machine-rename-${m}`).flex_1().min_w(0)
+            .on_click((_e, cx) => cx.stop_propagation())
+            .on_key_down((e, cx) => { if (e.key === "escape") { this.renaming = null; cx.stop_propagation(); cx.notify(); } })
+            .child(Input.new(this.renaming.input).h(20).px(5).rounded(4).border_1().border_color(t.accent).bg(t.background).text_size(12).text_color(t.foreground))
+          : div().id(`machine-name-${m ?? "local"}`).flex_1().truncate().text_size(13).font_bold().text_color(tone).when(Boolean(m), d => d.tooltip("Right-click for its menu")).child(m ?? "This computer"))
           .when(!connected && !lost && !rebuilt && !login, el => el.child(div().flex_none().child((machine?.state ?? "asleep").replace(/_/g, " "))))
           .when(dialing && !rebuilt, el => el.child(div().flex_none().child("connecting…")))
           .when(lost && !dialing && !rebuilt, el => el.child(div().id(`machine-retry-${m}`).flex_none().text_color(t.muted)
