@@ -21,7 +21,7 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle, InputState, Input } from "gpui-base";
-import { spaces, machines, panes, agents, terminals, focused, setAgentOrder, run, openOverlay, exec, hc, notify, nextCommand, checking, theme, shared, setShared, watchFolder, window, layout } from "herdr";
+import { spaces, machines, panes, agents, terminals, focused, setAgentOrder, run, openOverlay, exec, hc, notify, nextCommand, checking, props, settings, theme, shared, setShared, watchFolder, window, layout } from "herdr";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -30,6 +30,32 @@ function find(node, id) {
     if (found) return found;
   }
   return null;
+}
+
+// Text sizes are written for a 12px sidebar; all of them move with the terminals'
+// font size (settings' `font_size`) plus what the layout gives this mod
+// (`"props": { "font_offset": -1 }` on its block; default -1): 11 gives a 10px sidebar.
+const fs = (n) => n + (settings().font_size ?? 11) + (props()?.font_offset ?? -1) - 12;
+
+// Display cells: wide characters (Hangul, CJK, full-width, emoji) take two.
+const WIDE = /[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6]|\p{Extended_Pictographic}/u;
+const cells = (text) => [...text].reduce((n, ch) => n + (WIDE.test(ch) ? 2 : 1), 0);
+
+// A name as one line, or as two when it doesn't fit in `fit` cells: broken after
+// the last space that fits (unless that leaves the first line under half full),
+// else inside the word. What the second line can't hold is cut where it's drawn.
+function twoLines(text, fit) {
+  if (cells(text) <= fit) return [text];
+  let n = 0, cut = 0, space = 0;
+  for (const ch of text) {
+    const w = cells(ch);
+    if (n + w > fit) break;
+    n += w;
+    cut += ch.length;
+    if (ch === " ") space = cut;
+  }
+  if (space * 2 >= cut) cut = space;
+  return cut ? [text.slice(0, cut).trimEnd(), text.slice(cut).trimStart()] : [text];
 }
 
 // The space you're in: a tint of the accent, clear of the sidebar and of hover.
@@ -46,9 +72,6 @@ function place(s, ps) {
 }
 const rowHeight = ({ tree }) => (tree ? 23 : 24);
 const RAIL_CELL = 32;
-// A space's name and its git tail never shrink below this, so a short one ("api")
-// stays readable instead of turning into an ellipsis next to a long branch.
-const SIDE_MIN = 48;
 const railCell = (el) => h_flex().flex_none().justify_center().child(el);
 const where = (s, ps) => JSON.stringify([s.machine ?? null, place(s, ps)]);
 const base = (path) => path.replace(/\/+$/, "").split("/").pop();
@@ -149,6 +172,7 @@ export default class Spaces extends View {
     this.retrying = new Set(); // unreachable machines being dialed again
     this.lost = new Set(); // machines that couldn't be reached and haven't connected since
     this.renaming = null; // { name, input }: the machine whose title is a text box now
+    this.nameWidth = new Map(); // agent address -> the width its name has in its row, px
     try {
       this.reconnecting = JSON.parse(localStorage.getItem("machines.reconnecting") ?? "{}");
       if (!this.reconnecting || typeof this.reconnecting !== "object" || Array.isArray(this.reconnecting)) this.reconnecting = {};
@@ -549,7 +573,7 @@ export default class Spaces extends View {
   status(t, a) {
     const color = t[a.status] ?? t.dim;
     if (a.status === "working") return svg("mods/workspace-chrome/spinner.svg").size(12).mx(1).flex_none().text_color(t.working).spin(900);
-    if (a.status === "blocked") return div().flex_none().px(6).h(18).rounded(5).bg(t.blocked + "26").text_size(10.5).font_semibold().text_color(t.blocked).flex().items_center().child("Needs you");
+    if (a.status === "blocked") return div().flex_none().px(6).h(18).rounded(5).bg(t.blocked + "26").text_size(fs(10.5)).font_semibold().text_color(t.blocked).flex().items_center().child("Needs you");
     // Idle: a ring; done: a dot.
     if (a.status === "idle") return div().size(7).mx(3).flex_none().rounded(4).border(1.5).border_color(t.idle ?? t.dim);
     return div().size(7).mx(3).flex_none().rounded(4).bg(a.status === "done" ? color : t.dim + "00");
@@ -596,7 +620,7 @@ export default class Spaces extends View {
       : div().size(6).flex_none().rounded(3).bg(t[st] ?? t.dim);
     return ["blocked", "working", "done", "idle"].filter((st) => counts[st]).map((st) =>
       h_flex().flex_none().gap(3).items_center().child(mark(st))
-        .when(counts[st] > 1, (el) => el.child(div().text_size(10.5).text_color(st === "blocked" ? t.blocked : t.dim).child(String(counts[st])))));
+        .when(counts[st] > 1, (el) => el.child(div().text_size(fs(10.5)).text_color(st === "blocked" ? t.blocked : t.dim).child(String(counts[st])))));
   }
 
   // A space's agents, each followed by its sub-agents' tree. Folded: none, or,
@@ -615,7 +639,7 @@ export default class Spaces extends View {
       const fold = div()
         .id(`fold-${a.address}`)
         .h(18).px(3).gap(3).flex().items_center().rounded(4)
-        .text_size(11)
+        .text_size(fs(11))
         .text_color(open ? t.dim : (t[top] ?? t.dim))
         .cursor_pointer()
         .hover((el) => el.bg(t.hover).text_color(t.foreground))
@@ -626,13 +650,19 @@ export default class Spaces extends View {
         })
         .child(svg(`mods/workspace-chrome/chevron-${open ? "down" : "right"}.svg`).size(11).flex_none())
         .when(!open, (el) => el.child(String(subs.length)));
+      // One line, or two when it doesn't fit the width its name was last drawn in
+      // (cells of the UI font: 0.6 of its size each).
+      const size = fs(11.5);
+      const wide = this.nameWidth.get(a.address);
+      const name = wide ? twoLines(ag.name(a), Math.floor(wide / (size * 0.6))) : [ag.name(a)];
       const row = h_flex()
         .id(`ag-${a.address}`)
-        // The name is cut where the row ends: the whole of it on hover.
+        // The name is cut where its second line ends: the whole of it on hover.
         .tooltip(ag.name(a))
         .pl(26)
         .pr(8)
-        .h(22)
+        .min_h(22)
+        .when(name.length > 1, (el) => el.py(3))
         .flex_none()
         .rounded(7)
         .items_center()
@@ -642,9 +672,16 @@ export default class Spaces extends View {
         .hover((el) => el.bg(t.hover))
         .on_click(() => run("pane.focus", { pane: a.pane }))
         .when(Boolean(pic), (el) => el.child(pic))
-        .child(div().flex_1().min_w(0).truncate().text_size(11.5).text_color(idle ? t.muted : t.foreground).child(ag.name(a)))
+        .child(v_flex().id(`ag-name-${a.address}`).flex_1().min_w(0).text_size(size).line_height(`${Math.round(size * 1.35)}px`).text_color(idle ? t.muted : t.foreground)
+          .on_size_change((box, cx) => {
+            const px = Math.round(box.width / settings().zoom);
+            if (this.nameWidth.get(a.address) === px) return;
+            this.nameWidth.set(a.address, px);
+            cx.notify();
+          })
+          .children(name.map((line, i) => (i < name.length - 1 ? div().whitespace_nowrap().overflow_hidden() : div().truncate()).child(line))))
         .when(subs.length > 0, (el) => el.child(fold))
-        .when(Boolean(when), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(duration(ag.now - when))))
+        .when(Boolean(when), (el) => el.child(div().flex_none().text_size(fs(11)).text_color(t.dim).child(duration(ag.now - when))))
         .child(this.status(t, a));
       if (!open) return [row];
       return [row, ...subs.map((k) => {
@@ -659,7 +696,7 @@ export default class Spaces extends View {
           .h(22)
           .flex_none()
           .items_center()
-          .text_size(12)
+          .text_size(fs(12))
           .when(on, (el) => el.bg(t.raised))
           .hover((el) => el.bg(t.hover))
           .on_click(() => (this.listed.has(kid.address) ? run("pane.focus", { terminal: kid.address }) : run("terminal.peek", { terminal: kid.address })))
@@ -709,7 +746,7 @@ export default class Spaces extends View {
       return layout === "loading" || (!layout && this.machines.some(k => k.name === m && k.state === "connected"))
         || spaces().some(s => (s.machine ?? null) === m && !this.shown.has(s.id));
     };
-    const loadingRow = m => h_flex().id(`machine-loading-${m ?? "local"}`).h(28).flex_none().px(collapsed ? 0 : 8).items_center().when(collapsed, el => el.justify_center()).text_size(12).text_color(t.dim).child(collapsed ? "…" : "Loading…");
+    const loadingRow = m => h_flex().id(`machine-loading-${m ?? "local"}`).h(28).flex_none().px(collapsed ? 0 : 8).items_center().when(collapsed, el => el.justify_center()).text_size(fs(12)).text_color(t.dim).child(collapsed ? "…" : "Loading…");
     // Without machine headers nothing in the list starts a space: the sidebar's header has a + then.
     this.headed = remote.length > 0;
     if (!remote.length) {
@@ -732,7 +769,7 @@ export default class Spaces extends View {
     const firstDown = remote.find(down);
     const divider = collapsed
       ? railCell(div().w(RAIL_CELL).h(1).mt(8).mb(2).bg(t.border))
-      : h_flex().h(24).flex_none().mt(8).px(8).items_center().border_t(1).border_color(t.border).text_size(11).text_color(t.dim).child("Unreachable");
+      : h_flex().h(24).flex_none().mt(8).px(8).items_center().border_t(1).border_color(t.border).text_size(fs(11)).text_color(t.dim).child("Unreachable");
     return machineNames.flatMap((m) => {
       const mine = rows.filter((r) => (r.w.machine ?? null) === m);
       const repair = this.reconnecting[m];
@@ -749,7 +786,7 @@ export default class Spaces extends View {
       const folded = this.folded.has(m);
       const icon = svg(`mods/workspace-chrome/${m ? "server" : "monitor"}.svg`).size(13).flex_none().text_color(tone);
       const badge = div().absolute().right(-3).bottom(-2).size(6).rounded(3).border_1().border_color(t.chrome).bg(dot);
-      const head = h_flex().id(`machine-${m ?? "local"}`).h(22).flex_none().px(collapsed ? 0 : 8).gap(7).items_center().text_size(11).text_color(t.dim)
+      const head = h_flex().id(`machine-${m ?? "local"}`).h(22).flex_none().px(collapsed ? 0 : 8).gap(7).items_center().text_size(fs(11)).text_color(t.dim)
         .when(collapsed, el => el.mt(4).w(RAIL_CELL).justify_center().rounded(6).tooltip(login ? `${m} needs a login: run ${login}. Click for Copy.` : m ? `${m} · ${connected ? "connected" : (machine?.state ?? "asleep").replace(/_/g, " ")}` : "This computer"))
         .cursor_pointer().hover(s => s.bg(t.hover))
         .on_mouse_down("right", () => { if (m && !collapsed) openOverlay({ mod: "machine-menu", kind: "popup", width: 200, height: 260, props: { machine: m } }); })
@@ -768,8 +805,8 @@ export default class Spaces extends View {
           ? div().id(`machine-rename-${m}`).flex_1().min_w(0)
             .on_click((_e, cx) => cx.stop_propagation())
             .on_key_down((e, cx) => { if (e.key === "escape") { this.renaming = null; cx.stop_propagation(); cx.notify(); } })
-            .child(Input.new(this.renaming.input).h(20).px(5).rounded(4).border_1().border_color(t.accent).bg(t.background).text_size(12).text_color(t.foreground))
-          : div().id(`machine-name-${m ?? "local"}`).flex_1().truncate().text_size(13).font_bold().text_color(tone).when(Boolean(m), d => d.tooltip("Right-click for its menu")).child(m ?? "This computer"))
+            .child(Input.new(this.renaming.input).h(20).px(5).rounded(4).border_1().border_color(t.accent).bg(t.background).text_size(fs(12)).text_color(t.foreground))
+          : div().id(`machine-name-${m ?? "local"}`).flex_1().truncate().text_size(fs(13)).font_bold().text_color(tone).when(Boolean(m), d => d.tooltip("Right-click for its menu")).child(m ?? "This computer"))
           .when(!connected && !lost && !rebuilt && !login, el => el.child(div().flex_none().child((machine?.state ?? "asleep").replace(/_/g, " "))))
           .when(dialing && !rebuilt, el => el.child(div().flex_none().child("connecting…")))
           .when(lost && !dialing && !rebuilt, el => el.child(div().id(`machine-retry-${m}`).flex_none().text_color(t.muted)
@@ -789,7 +826,7 @@ export default class Spaces extends View {
           .child(div().size(6).rounded(3).flex_none().bg(dot))
           .child(svg(`mods/workspace-chrome/chevron-${folded ? "right" : "down"}.svg`).size(11).flex_none()));
       const empty = h_flex().id(`machine-new-${m ?? "local"}`).h(28).flex_none().px(collapsed ? 0 : 8).gap(7).items_center().rounded(7)
-        .text_size(12).text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
+        .text_size(fs(12)).text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
         .on_click(() => run("space.new", { machine: m ?? "" }))
         .when(collapsed, el => el.w(RAIL_CELL).rounded(6).justify_center().tooltip(`New space on ${m ?? "this computer"}`)
           .child(h_flex().size(18).rounded(5).border_1().border_color(t.dim).items_center().justify_center()
@@ -798,11 +835,11 @@ export default class Spaces extends View {
       if (!collapsed && rebuilt) { before += 1; return [...lead, head]; }
       const cell = collapsed ? railCell : (el) => el;
       const guidance = !collapsed && login ? [v_flex().px(8).pb(6).gap(3).flex_none()
-        .child(div().text_size(11).text_color(t.blocked).child("needs a login: run"))
+        .child(div().text_size(fs(11)).text_color(t.blocked).child("needs a login: run"))
         .child(h_flex().gap(5).items_center()
-          .child(div().flex_1().min_w(0).truncate().tooltip(login).text_size(11).text_color(t.muted).child(login))
+          .child(div().flex_1().min_w(0).truncate().tooltip(login).text_size(fs(11)).text_color(t.muted).child(login))
           .child(div().id(`machine-login-copy-${m}`).flex_none().px(5).py(2).rounded(4)
-            .text_size(11).text_color(t.foreground).bg(t.raised).cursor_pointer().hover(s => s.bg(t.hover))
+            .text_size(fs(11)).text_color(t.foreground).bg(t.raised).cursor_pointer().hover(s => s.bg(t.hover))
             .on_click((_e, cx) => { cx.stop_propagation(); cx.write_to_clipboard(login); this.copiedLogin = login; cx.notify(); })
             .child(this.copiedLogin === login ? "Copied" : "Copy")))] : [];
       const { cells, first } = drawAll(mine);
@@ -813,23 +850,23 @@ export default class Spaces extends View {
     });
   }
 
-  // Only what's unusual, after the name: "herdr \u00b7 spike \u21912 \u21931". The repo or
-  // branch goes when the name already says it (a worktree is named after its branch),
-  // and master/main go: nearly every space is on one. When the row is full, the
-  // name keeps its text's width and this gets what is left (never under SIDE_MIN).
+  // Only what's unusual, on a line of its own under the name: "herdr \u00b7 spike \u21912 \u21931".
+  // The repo or branch goes when the name already says it (a worktree is named after
+  // its branch), and master/main go: nearly every space is on one. Null when that
+  // leaves nothing to say: the row stays one line.
   gitTail(g, tree, name, t) {
     const raw = g.branch ?? "detached";
     const same = (a) => a.toLowerCase() === name.toLowerCase();
     const branch = same(raw) || raw === "master" || raw === "main" ? "" : raw;
     const repo = tree || same(g.name) ? "" : g.name;
     const where = [repo, branch].filter(Boolean).join(" \u00b7 ");
+    if (!where && !(g.ahead > 0) && !(g.behind > 0)) return null;
+    const size = fs(11);
     return h_flex()
-      .flex_1()
-      .min_w(where ? SIDE_MIN : 0)
       .gap(5)
-      .justify_end()
       .items_center()
-      .text_size(11)
+      .text_size(size)
+      .line_height(`${Math.round(size * 1.35)}px`)
       .text_color(t.dim)
       .when(Boolean(where), (el) => el.child(div().min_w(0).truncate().child(where)))
       .when(g.ahead > 0, (el) => el.child(div().flex_none().text_color(t.ansi2).child(`\u2191${g.ahead}`)))
@@ -846,11 +883,13 @@ export default class Spaces extends View {
     const colors = shared("space.colors") ?? {};
     const color = colors[w.id] ?? "ansi6";
     const fill = color.startsWith("#") ? color : (MARK[color] ?? t[color]);
+    const git = g ? this.gitTail(g, tree, w.name, t) : null;
     return v_flex()
       .relative()
       .id(`space-${w.id}`)
       .px(8)
-      .h(rowHeight({ tree }))
+      .min_h(rowHeight({ tree }))
+      .when(Boolean(git), (el) => el.py(3))
       .flex_none()
       .justify_center()
       .rounded(8)
@@ -897,10 +936,11 @@ export default class Spaces extends View {
           .items_center()
           .when(Boolean(tree), el => el.pl(22).child(svg("mods/workspace-chrome/branch.svg").size(13).flex_none().text_color(t.dim)))
           .when(!tree, el => el.child(h_flex().size(18).flex_none().rounded(5).bg(fill).items_center().justify_center().text_size(10.5).font_bold().text_color("#ffffff").child([...w.name][0]?.toUpperCase() ?? "?")))
-          .child(div().flex_initial().min_w(SIDE_MIN).truncate().text_color(t.foreground).child(w.name))
-          .child(g ? this.gitTail(g, tree, w.name, t) : div().flex_1())
+          .child(v_flex().flex_1().min_w(0)
+            .child(div().truncate().line_height(`${Math.round(fs(12) * 1.35)}px`).text_color(t.foreground).child(w.name))
+            .when(Boolean(git), el => el.child(git)))
           .when(n > 0, el => el.child(h_flex().id(`space-fold-${w.id}`).flex_none().h(18).px(3).gap(3).items_center().rounded(4)
-            .text_size(11).text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
+            .text_size(fs(11)).text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
             .on_mouse_down("left", () => { this.foldPress = w.id; })
             .when(foldedHere, el => el.gap(5).children(ag ? this.summary(mine, t, ag) : []))
             .child(svg(`mods/workspace-chrome/chevron-${foldedHere ? "right" : "down"}.svg`).size(11).flex_none()))),
@@ -947,7 +987,7 @@ export default class Spaces extends View {
       if (this.activeAt >= 0) this.scroll.scroll_to_item(this.activeAt);
     }
     const titleButton = (id) => div().id(id).size(22).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer().hover(s => s.bg(t.hover).text_color(t.foreground));
-    return v_flex().size_full().min_h(0).bg(t.chrome).text_size(12)
+    return v_flex().size_full().min_h(0).bg(t.chrome).text_size(fs(12))
       // No title row: the fold switch and, without machine headers, the + are in the sidebar's header
       // (sidebar-header). On the rail without headers nothing else starts a space, so a + stays here.
       .when(collapsed && !this.headed, el => el.child(h_flex().h(31).flex_none().items_center().justify_center().text_color(t.dim)

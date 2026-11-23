@@ -29,7 +29,10 @@
               "id": "spaces",
               "type": "block",
               "content": {
-                "mod": "spaces-agents"
+                "mod": "spaces-agents",
+                "props": {
+                  "font_offset": -1
+                }
               },
               "size": {
                 "weight": 1
