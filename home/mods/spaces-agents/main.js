@@ -146,6 +146,8 @@ export default class Spaces extends View {
     this.scroll = ScrollHandle.new(); // the list's position: the active space is brought into view through it
     this.activeAt = -1; // the active space's place among the list's children (headers and rows), -1 when not drawn
     this.machines = [];
+    this.retrying = new Set(); // unreachable machines being dialed again
+    this.lost = new Set(); // machines that couldn't be reached and haven't connected since
     try {
       this.reconnecting = JSON.parse(localStorage.getItem("machines.reconnecting") ?? "{}");
       if (!this.reconnecting || typeof this.reconnecting !== "object" || Array.isArray(this.reconnecting)) this.reconnecting = {};
@@ -232,6 +234,24 @@ export default class Spaces extends View {
     cx.spawn(async cx => {
       try { const r = await hc(["machine", "ls", "--json"]); if (r.code === 0) this.machines = (JSON.parse(r.stdout).machines ?? []).filter((m) => !m.temporary); } catch {}
       cx.notify();
+    });
+  }
+
+  // Dials an unreachable machine now, not at the core's next try: `machine.connect`,
+  // which hc has no command for, so the request goes in through `hc connect`.
+  retry(name, cx) {
+    if (this.retrying.has(name)) return;
+    this.retrying.add(name);
+    cx.notify();
+    cx.spawn(async cx => {
+      const ask = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "machine.connect", params: { machine: name } });
+      try {
+        await (window()?.platform === "windows"
+          ? exec("powershell", ["-NoProfile", "-Command", `'${ask.replace(/'/g, "''")}' | hc connect`], { timeout: 120000 })
+          : exec("sh", ["-c", 'printf "%s\\n" "$1" | hc connect', "sh", ask], { timeout: 120000 }));
+      } catch {}
+      this.retrying.delete(name);
+      this.refreshMachines(cx);
     });
   }
 
@@ -571,7 +591,7 @@ export default class Spaces extends View {
         .hover((el) => el.bg(t.hover))
         .on_click(() => run("pane.focus", { pane: a.pane }))
         .when(Boolean(pic), (el) => el.child(pic))
-        .child(div().flex_1().min_w(0).truncate().text_size(12.5).text_color(idle ? t.muted : t.foreground).child(ag.name(a)))
+        .child(div().flex_1().min_w(0).truncate().text_size(11.5).text_color(idle ? t.muted : t.foreground).child(ag.name(a)))
         .when(subs.length > 0, (el) => el.child(fold))
         .when(Boolean(when), (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(duration(ag.now - when))))
         .child(this.status(t, a));
@@ -648,8 +668,15 @@ export default class Spaces extends View {
       return cells;
     }
     // The machines that can't be reached go last, in red, under a title of their own.
+    // One stays there while it is dialed again ("connecting"), until it connects:
+    // it would jump up the list and back at every try.
     const machineOf = m => this.machines.find(k => k.name === m) ?? this.reconnecting[m]?.machine;
-    const down = m => machineOf(m)?.state === "unreachable";
+    for (const m of remote) {
+      const state = machineOf(m)?.state;
+      if (state === "unreachable") this.lost.add(m);
+      else if (state !== "connecting") this.lost.delete(m);
+    }
+    const down = m => this.lost.has(m);
     const machineNames = [null, ...remote.filter(m => !down(m)), ...remote.filter(down)];
     const firstDown = remote.find(down);
     const divider = collapsed
@@ -661,6 +688,7 @@ export default class Spaces extends View {
       const machine = machineOf(m);
       const connected = !m || machine?.state === "connected";
       const lost = Boolean(m) && down(m);
+      const dialing = lost && (machine?.state === "connecting" || this.retrying.has(m));
       const tone = lost ? t.ansi1 : t.accent;
       const dot = connected ? t.ansi2 : lost ? t.ansi1 : t.dim;
       const lead = m === firstDown ? [divider] : [];
@@ -685,7 +713,12 @@ export default class Spaces extends View {
         .when(!collapsed, el => el.child(icon))
         .when(collapsed, el => el.child(div().relative().flex_none().child(icon).when(Boolean(m), el => el.child(badge))))
         .when(!collapsed, el => el.child(div().flex_1().truncate().text_size(13).font_bold().text_color(tone).child(m ?? "This computer"))
-          .when(!connected && !rebuilt && !login, el => el.child(div().flex_none().when(lost, d => d.text_color(t.ansi1)).child((machine?.state ?? "asleep").replace(/_/g, " "))))
+          .when(!connected && !lost && !rebuilt && !login, el => el.child(div().flex_none().child((machine?.state ?? "asleep").replace(/_/g, " "))))
+          .when(dialing && !rebuilt, el => el.child(div().flex_none().child("connecting…")))
+          .when(lost && !dialing && !rebuilt, el => el.child(div().id(`machine-retry-${m}`).flex_none().text_color(t.muted)
+            .hover(s => s.text_color(t.foreground)).tooltip("Try to reach it again now")
+            .on_click((_e, cx) => { cx.stop_propagation(); this.retry(m, cx); })
+            .child("Retry")))
           .when(rebuilt, el => el.child(h_flex().flex_none().gap(3).items_center()
             .child(div().max_w(140).truncate().child(repair?.error || "rebuilt ·"))
             .child(div().id(`machine-connect-${m}`).text_color(repair?.error ? t.blocked : t.muted)
@@ -725,8 +758,8 @@ export default class Spaces extends View {
 
   // Only what's unusual, after the name: "herdr \u00b7 spike \u21912 \u21931". The repo or
   // branch goes when the name already says it (a worktree is named after its branch),
-  // and master/main go: nearly every space is on one. When the row is full, it
-  // and the name both start from their text's width and give way in proportion.
+  // and master/main go: nearly every space is on one. When the row is full, the
+  // name keeps its text's width and this gets what is left (never under SIDE_MIN).
   gitTail(g, tree, name, t) {
     const raw = g.branch ?? "detached";
     const same = (a) => a.toLowerCase() === name.toLowerCase();
@@ -734,12 +767,12 @@ export default class Spaces extends View {
     const repo = tree || same(g.name) ? "" : g.name;
     const where = [repo, branch].filter(Boolean).join(" \u00b7 ");
     return h_flex()
-      .flex_auto()
+      .flex_1()
       .min_w(where ? SIDE_MIN : 0)
       .gap(5)
       .justify_end()
       .items_center()
-      .text_size(11.5)
+      .text_size(11)
       .text_color(t.dim)
       .when(Boolean(where), (el) => el.child(div().min_w(0).truncate().child(where)))
       .when(g.ahead > 0, (el) => el.child(div().flex_none().text_color(t.ansi2).child(`\u2191${g.ahead}`)))
@@ -857,7 +890,7 @@ export default class Spaces extends View {
       if (this.activeAt >= 0) this.scroll.scroll_to_item(this.activeAt);
     }
     const titleButton = (id) => div().id(id).size(22).flex_none().flex().items_center().justify_center().rounded(6).cursor_pointer().hover(s => s.bg(t.hover).text_color(t.foreground));
-    return v_flex().size_full().min_h(0).bg(t.chrome).text_size(13)
+    return v_flex().size_full().min_h(0).bg(t.chrome).text_size(12)
       // No title row: the fold switch and, without machine headers, the + are in the sidebar's header
       // (sidebar-header). On the rail without headers nothing else starts a space, so a + stays here.
       .when(collapsed && !this.headed, el => el.child(h_flex().h(31).flex_none().items_center().justify_center().text_color(t.dim)

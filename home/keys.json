@@ -28,6 +28,11 @@
     "ctrl-7": "agent-jump.7",
     "ctrl-8": "agent-jump.8",
     "ctrl-9": "agent-jump.9",
+    "alt-a": "agent-jump.next",
+    "alt-|": "pane.split:right",
+    "alt-\"": "pane.split:down",
+    "alt-up": { "command": "terminal.scroll", "args": { "pages": -0.5 } },
+    "alt-down": { "command": "terminal.scroll", "args": { "pages": 0.5 } },
     "alt-s": "mod.open:pane-picker",
     "alt-w": "mod.open:confirm-close-pane",
     "alt-z": "pane.zoom"

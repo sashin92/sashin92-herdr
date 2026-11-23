@@ -98,9 +98,11 @@ export default class PanePicker extends View {
     this.handle = cx.focus_handle();
     this.handle.focus();
     cx.timer.after(600, () => this.handle.focus());
-    // The selected row's key, and the unfolded spaces' and tabs' ids.
-    this.sel = null;
-    this.open = new Set();
+    // The selected row's key, and the unfolded spaces' and tabs' ids: it opens
+    // on the pane you're in, its space and tab unfolded.
+    const cur = focused();
+    this.sel = cur?.pane ? `p:${cur.pane}` : null;
+    this.open = new Set(cur ? [cur.space, cur.tab] : []);
     this.scroll = 0;
     // Screens read so far, by terminal address; each tab's boxes, by tab id.
     this.shots = {};

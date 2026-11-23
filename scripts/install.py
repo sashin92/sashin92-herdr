@@ -57,6 +57,7 @@ class Run:
         self.platform = platform
         self.dry = dry
         self.changes = 0
+        self.replaced = []  # files copied over, as paths under the home
         # A folder of its own: a run in the same second as another (a restore right after
         # an install) must not keep its files in the backup it is reading from.
         stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -110,6 +111,7 @@ def copy_files(run):
                     same += 1
                     continue
                 run.changed(f"{rel} ({'replaced' if os.path.exists(dst) else 'new'})")
+                run.replaced.append(rel)
                 run.backup(dst)
                 if not run.dry:
                     os.makedirs(os.path.dirname(dst), exist_ok=True)
@@ -307,6 +309,19 @@ def app_steps(run):
             run.changed(f"showing the {LAYOUT} layout")
         else:
             run.say("!", f"couldn't show the {LAYOUT} layout: {out}")
+
+    # A kept window loads its mod once: after its files changed, close it and open it again.
+    for mod in KEPT:
+        if not any(rel.startswith(os.path.join("mods", mod) + os.sep) for rel in run.replaced):
+            continue
+        if mod in shown().get("overlays", []):
+            app("do", "mod.open", "--name", mod)
+        if mod not in shown().get("overlays", []):
+            app("do", "mod.open", "--name", mod)
+        if mod in shown().get("overlays", []):
+            run.changed(f"{mod} opened again (its files changed)")
+        else:
+            run.say("!", f"{mod} didn't open again: run `herdr-app do mod.open --name {mod}`")
 
     # The layout's dark theme, read from where Herdr keeps a layout's picks.
     try:
