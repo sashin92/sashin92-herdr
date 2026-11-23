@@ -32,6 +32,9 @@ function find(node, id) {
   return null;
 }
 
+// The space you're in: a tint of the accent, clear of the sidebar and of hover.
+const picked = (t) => t.accent.slice(0, 7) + "40";
+
 // The sidebar's rail goes by its width, not a flag: dragging its edge narrows it too.
 const narrow = () => (find(layout(), "sidebar")?.size?.px ?? Infinity) < 160;
 
@@ -644,17 +647,29 @@ export default class Spaces extends View {
       this.activeAt = first;
       return cells;
     }
-    const machineNames = [null, ...remote];
+    // The machines that can't be reached go last, in red, under a title of their own.
+    const machineOf = m => this.machines.find(k => k.name === m) ?? this.reconnecting[m]?.machine;
+    const down = m => machineOf(m)?.state === "unreachable";
+    const machineNames = [null, ...remote.filter(m => !down(m)), ...remote.filter(down)];
+    const firstDown = remote.find(down);
+    const divider = collapsed
+      ? railCell(div().w(RAIL_CELL).h(1).mt(8).mb(2).bg(t.border))
+      : h_flex().h(24).flex_none().mt(8).px(8).items_center().border_t(1).border_color(t.border).text_size(11).text_color(t.dim).child("Unreachable");
     return machineNames.flatMap((m) => {
       const mine = rows.filter((r) => (r.w.machine ?? null) === m);
       const repair = this.reconnecting[m];
-      const machine = this.machines.find(k => k.name === m) ?? repair?.machine;
+      const machine = machineOf(m);
       const connected = !m || machine?.state === "connected";
+      const lost = Boolean(m) && down(m);
+      const tone = lost ? t.ansi1 : t.accent;
+      const dot = connected ? t.ansi2 : lost ? t.ansi1 : t.dim;
+      const lead = m === firstDown ? [divider] : [];
+      before += lead.length;
       const rebuilt = this.rebuilt(machine) || !!repair;
       const login = machine?.state === "needs_login" ? `hc machine login ${m}` : null;
       const folded = this.folded.has(m);
-      const icon = svg(`mods/workspace-chrome/${m ? "server" : "monitor"}.svg`).size(13).flex_none();
-      const badge = div().absolute().right(-3).bottom(-2).size(6).rounded(3).border_1().border_color(t.chrome).bg(connected ? t.ansi2 : t.dim);
+      const icon = svg(`mods/workspace-chrome/${m ? "server" : "monitor"}.svg`).size(13).flex_none().text_color(tone);
+      const badge = div().absolute().right(-3).bottom(-2).size(6).rounded(3).border_1().border_color(t.chrome).bg(dot);
       const head = h_flex().id(`machine-${m ?? "local"}`).h(22).flex_none().px(collapsed ? 0 : 8).gap(7).items_center().text_size(11).text_color(t.dim)
         .when(collapsed, el => el.mt(4).w(RAIL_CELL).justify_center().rounded(6).tooltip(login ? `${m} needs a login: run ${login}. Click for Copy.` : m ? `${m} · ${connected ? "connected" : (machine?.state ?? "asleep").replace(/_/g, " ")}` : "This computer"))
         .cursor_pointer().hover(s => s.bg(t.hover))
@@ -669,8 +684,8 @@ export default class Spaces extends View {
           .on_click((_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "machine-add", kind: "dialog", width: 560 }); }).child("⚠")))
         .when(!collapsed, el => el.child(icon))
         .when(collapsed, el => el.child(div().relative().flex_none().child(icon).when(Boolean(m), el => el.child(badge))))
-        .when(!collapsed, el => el.child(div().flex_1().truncate().child(m ?? "This computer"))
-          .when(!connected && !rebuilt && !login, el => el.child(div().flex_none().child((machine?.state ?? "asleep").replace(/_/g, " "))))
+        .when(!collapsed, el => el.child(div().flex_1().truncate().text_size(13).font_bold().text_color(tone).child(m ?? "This computer"))
+          .when(!connected && !rebuilt && !login, el => el.child(div().flex_none().when(lost, d => d.text_color(t.ansi1)).child((machine?.state ?? "asleep").replace(/_/g, " "))))
           .when(rebuilt, el => el.child(h_flex().flex_none().gap(3).items_center()
             .child(div().max_w(140).truncate().child(repair?.error || "rebuilt ·"))
             .child(div().id(`machine-connect-${m}`).text_color(repair?.error ? t.blocked : t.muted)
@@ -681,7 +696,7 @@ export default class Spaces extends View {
           .when(folded, el => el.children(this.summary(mine.flatMap((r) => ag.bySpace.get(r.w.id) ?? []), t, ag)))
           .when(connected, el => el.child(div().id(`machine-add-${m ?? "local"}`).flex_none().px(4).rounded(4).hover(s => s.bg(t.hover).text_color(t.foreground))
             .on_click((_e, cx) => { cx.stop_propagation(); run("space.new", { machine: m ?? "" }); }).child("+")))
-          .child(div().size(6).rounded(3).flex_none().bg(connected ? t.ansi2 : t.dim))
+          .child(div().size(6).rounded(3).flex_none().bg(dot))
           .child(svg(`mods/workspace-chrome/chevron-${folded ? "right" : "down"}.svg`).size(11).flex_none()));
       const empty = h_flex().id(`machine-new-${m ?? "local"}`).h(28).flex_none().px(collapsed ? 0 : 8).gap(7).items_center().rounded(7)
         .text_size(12).text_color(t.dim).hover(s => s.bg(t.hover).text_color(t.foreground))
@@ -690,7 +705,7 @@ export default class Spaces extends View {
           .child(h_flex().size(18).rounded(5).border_1().border_color(t.dim).items_center().justify_center()
             .child(svg("mods/workspace-chrome/plus.svg").size(10))))
         .when(!collapsed, el => el.child(svg("mods/workspace-chrome/plus.svg").size(12)).child("New space there"));
-      if (!collapsed && rebuilt) { before += 1; return [head]; }
+      if (!collapsed && rebuilt) { before += 1; return [...lead, head]; }
       const cell = collapsed ? railCell : (el) => el;
       const guidance = !collapsed && login ? [v_flex().px(8).pb(6).gap(3).flex_none()
         .child(div().text_size(11).text_color(t.blocked).child("needs a login: run"))
@@ -704,7 +719,7 @@ export default class Spaces extends View {
       const items = [cell(head), ...guidance, ...(folded ? [] : mine.length ? cells : [loading(m) ? loadingRow(m) : cell(empty)])];
       if (!folded && first >= 0) this.activeAt = before + 1 + guidance.length + first;
       before += items.length;
-      return items;
+      return [...lead, ...items];
     });
   }
 
@@ -749,7 +764,7 @@ export default class Spaces extends View {
       .flex_none()
       .justify_center()
       .rounded(8)
-      .when(on, (el) => el.bg(t.selected))
+      .when(on, (el) => el.bg(picked(t)))
       .when(!on, (el) => el.hover((s) => s.bg(t.hover)))
       .when(this.pressed === w.id && this.over !== w.id, (el) => el.opacity(0.5))
       .when(this.pressed !== null && this.over === w.id && this.pressed !== w.id, (el) => el.child(
@@ -811,7 +826,7 @@ export default class Spaces extends View {
       .rounded(6)
       .justify_center()
       .items_center()
-      .when(w.active, (el) => el.bg(t.selected))
+      .when(w.active, (el) => el.bg(picked(t)))
       .when(!w.active, (el) => el.hover((s) => s.bg(t.hover)))
       .on_click(() => run("space.select", { id: w.id }))
       .child(div().text_color(w.active ? t.foreground : t.muted).child(String(i + 1)))

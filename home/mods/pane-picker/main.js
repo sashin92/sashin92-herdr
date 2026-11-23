@@ -296,6 +296,8 @@ export default class PanePicker extends View {
       cx.notify();
     };
 
+    // The selected row: a tint of the accent, clear of the popover and of hover.
+    const picked = t.accent.slice(0, 7) + "40";
     const row = (r) => {
       if (r.kind === "machine") {
         return div()
@@ -310,11 +312,9 @@ export default class PanePicker extends View {
               .px(10)
               .gap(8)
               .items_center()
-              .rounded(6)
-              .bg(t.raised)
-              .text_color(t.foreground)
-              .child(svg(`mods/workspace-chrome/${r.remote ? "server" : "monitor"}.svg`).size(13).flex_none())
-              .child(div().flex_1().truncate().text_size(12).font_semibold().child(r.name))
+              .text_color(t.accent)
+              .child(svg(`mods/workspace-chrome/${r.remote ? "server" : "monitor"}.svg`).size(14).flex_none())
+              .child(div().flex_1().truncate().text_size(14).font_bold().child(r.name))
               .child(div().flex_none().text_size(11).text_color(t.dim).child(`${count(r.spaces, "space")} · ${count(r.panes, "pane")}`)),
           );
       }
@@ -330,8 +330,8 @@ export default class PanePicker extends View {
           .gap(8)
           .items_center()
           .cursor_pointer()
-          .when(on, (el) => el.bg(t.hover))
-          .hover((s) => s.bg(t.hover));
+          .when(on, (el) => el.bg(picked))
+          .when(!on, (el) => el.hover((s) => s.bg(t.hover)));
       if (r.kind === "space") {
         return status(
           base(`pp-s-${r.w.id}`, 10)
